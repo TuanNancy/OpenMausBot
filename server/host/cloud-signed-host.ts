@@ -3,7 +3,8 @@
 // its own route, `GET /api/cloud/box`.
 import type { BoxReport } from "../bot-box/box.ts";
 import { createCloudHealth, type CloudHealth, type CloudHealthDeps } from "../cloud-health.ts";
-import type { CloudHomeConfig } from "../cloud-home.ts";
+import { clockKicker, clockSources, createCloudClock, registerCloudClock, type CloudClock } from "../cloud-clock.ts";
+import { CLOUD_PAIRING_SKEW_S, type CloudHomeConfig } from "../cloud-home.ts";
 import type { CloudPower } from "../cloud-power.ts";
 import { createCloudSignedRoutes } from "../routes/cloud-signed.ts";
 import type { TeamAdminSummary } from "../cloud-team-admin.ts";
@@ -30,12 +31,17 @@ export interface CloudSignedHostDeps {
   plan?: (cancelled: boolean) => void;
   /** Which plan this Cloud is on now (the Admin's signed request). */
   planTier?: (tier: string) => void;
+  /** Tests: the clock watch to use instead of the home's own (which measures over the network and is registered for wakes). */
+  clock?: CloudClock;
 }
 
 export function createCloudSignedHost(deps: CloudSignedHostDeps): { cloudHealth: CloudHealth | null; cloudSigned: ReturnType<typeof createCloudSignedRoutes> | null } {
   const cloudHealth = deps.cloudHome ? createCloudHealth({ ...deps.health, box: deps.box }) : null;
+  // The home's clock against its Admin and two hosts of its own (server/cloud-clock.ts); wakes reach it through cloud-power.ts.
+  const clock = deps.cloudHome ? deps.clock ?? createCloudClock({ origins: clockSources(deps.cloudHome.adminOrigin), kick: clockKicker(), log: (line) => console.warn(line), skewS: CLOUD_PAIRING_SKEW_S }) : null;
+  if (clock && !deps.clock) registerCloudClock(clock);
   const cloudSigned = deps.cloudHome && cloudHealth
-    ? createCloudSignedRoutes({ secret: deps.cloudHome.bootstrapSecret, sessions: deps.sessions, team: deps.cloudHome.team, health: cloudHealth, power: deps.power, box: deps.box,
+    ? createCloudSignedRoutes({ secret: deps.cloudHome.bootstrapSecret, sessions: deps.sessions, team: deps.cloudHome.team, health: cloudHealth, power: deps.power, box: deps.box, clock,
       ...(deps.cloudHome.team && deps.teamAdmin ? { teamAdmin: deps.teamAdmin } : {}), ...(deps.cloudHome.team && deps.invited ? { invited: deps.invited } : {}), ...(deps.cloudHome.team && deps.memberBrowserOff ? { memberBrowserOff: deps.memberBrowserOff } : {}),
       ...(deps.cloudHome.team && deps.memberLeft ? { memberLeft: deps.memberLeft } : {}), ...(deps.cloudHome.team && deps.policyChanged ? { policyChanged: deps.policyChanged } : {}), ...(deps.plan ? { plan: deps.plan } : {}), ...(deps.planTier ? { planTier: deps.planTier } : {}) })
     : null;
