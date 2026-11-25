@@ -1,4 +1,4 @@
-import { settingUp, type FeedRoom } from "@/lib/room-feed";
+import type { FeedRoom } from "@/lib/room-feed";
 import { useFeature } from "@/lib/use-feature";
 import { SIDEBAR_INLINE, useMediaQuery } from "@/lib/use-media-query";
 
@@ -6,5 +6,5 @@ import { SIDEBAR_INLINE, useMediaQuery } from "@/lib/use-media-query";
 export function useRoomFeed(group: FeedRoom | undefined): boolean {
   const on = useFeature("roomFeed");
   const wide = useMediaQuery(SIDEBAR_INLINE, true);
-  return Boolean(group) && on && !group!.dm && wide && !settingUp(group!);
+  return Boolean(group) && on && !group!.dm && wide;
 }
