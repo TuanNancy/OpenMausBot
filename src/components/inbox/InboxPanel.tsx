@@ -90,7 +90,8 @@ export const InboxPanel = memo(function InboxPanel() {
   const pinnedThreads = useMemo(() => new Set(pinnedRows.map((row) => row.task.threadId)), [pinnedRows]);
   const finishedRows = useStoreSelector((state) => finishedThreads(state.bots, state.groups, state.pendingQueued, undefined, readNewsThreads(view), pinnedThreads), sameJson);
   const team = useTeamPeople();
-  const count = forYouCount(view) + inboxFixes(team?.needsYou, view).length;
+  const fixes = inboxFixes(team?.needsYou, view).length;
+  const count = forYouCount(view) + fixes;
   const openThread = useStoreSelector((state) => inboxOpenThread(state), sameJson);
   const body = (
     <>
@@ -140,7 +141,7 @@ export const InboxPanel = memo(function InboxPanel() {
                         <p className="mt-1 text-[13px] leading-[18px] text-ink-tertiary">{t("inbox.emptyHint")}</p>
                       </div>
                     )
-                  : <InboxGroups groups={groups} now={now} current={held} onOpen={open} onAction={act} />}
+                  : <InboxGroups groups={groups} now={now} current={held} onOpen={open} onAction={act} moreForYou={fixes > 0} />}
               </div>
               {!query.trim() && <InboxActive view={view} current={openThread} exclude={pinnedThreads} />}
               {/* The finished, already-read conversations. */}
