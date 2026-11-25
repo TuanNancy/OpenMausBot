@@ -18,6 +18,8 @@ export function installTwoPlacesMain(deps: {
   /** The verified account, whose state lists the person's teams; with `teamsRemembered`, each team is a place read for its bots. */
   account?: () => ({ state(): any } | null);
   teamsRemembered?: { read(): unknown; write(value: unknown): void };
+  /** "This computer and My Cloud together" is on: My Cloud is never suggested. */
+  together?(): boolean;
   tell(): void;
   log?(line: string): void;
 }): TwoPlaces & { close(): void };

@@ -524,3 +524,14 @@ test("＋'s new workspace and a workspace's menu: only while main offers it, onl
   creatable = false; r.w.trusted = true;
   assert.throws(() => r.call("workspaces:local-new", "Notes", null), /isn't something to add/);
 });
+
+test("Show bots together: in the menu of This computer and My Cloud while this computer is home; of the workspace that runs and My Cloud once My Cloud is home; nowhere else, and nowhere where it is not offered", () => {
+  const marked = (places) => places.filter(place => "together" in place).map(place => [place.id, place.together]);
+  const alone = { activeId: "local", environments: [{ id: "home", kind: "remote", name: "My Cloud", origin: HOME }] };
+  const clouds = session({ teams: [], clouds: parseCloudList([PRIMARY]) });
+  assert.deepEqual(marked(railPlaces({ saved: alone, home: null, mine: HOME, state: clouds, profiles: [{ id: "work", name: "Work" }], together: { on: true, profile: null } })),
+    [["local", true], ["home", true]], "a named workspace beside This computer is not the one that joins");
+  assert.deepEqual(marked(railPlaces({ saved: saved(), home: HOME, mine: HOME, state: session(), profiles: [{ id: "default" }, { id: "work", name: "Work" }], together: { on: false, profile: "default" } })),
+    [["profile:default", false], ["home", false]], "My Cloud as home: This Mac, which runs, and My Cloud; never Client A, a team's Cloud or a server");
+  assert.deepEqual(marked(railPlaces({ saved: saved(), home: HOME, mine: HOME, state: session(), profiles: [{ id: "default" }], together: null })), [], "not offered (the frozen copy runs): no row");
+});

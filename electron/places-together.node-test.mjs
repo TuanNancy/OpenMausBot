@@ -493,7 +493,10 @@ test("main wires it to the one rule for this app's own pages, and the preload of
   assert.match(main, /desktopNotifications\.arrived\(\); placesTogether\.arrived\(\);/);
   assert.match(main, /try \{ placesTogether\.scopeChanged\(\); \} catch \{\}/, "an account change or sign-out drops the lists at once");
   assert.match(main, /placesTogether\.navigated\(homeOfUrl\(url\)\)/);
-  assert.match(main, /powerChecked: async \(\) => \{ const account = cloudAccount; if \(!account\) return false; await account\.refresh\(\); return Date\.now\(\) - \(account\.state\(\)\.verifiedAt \?\? 0\) < 5_000; \}/);
+  assert.match(main, /const cloudAwakeNow = async \(\) => \{ const account = cloudAccount; if \(!account\) return false; await account\.refresh\(\); return Date\.now\(\) - \(account\.state\(\)\.verifiedAt \?\? 0\) < 5_000; \};/);
+  assert.match(main, /powerChecked: cloudAwakeNow, computer:/, "the list asks the Admin just before each read of My Cloud");
+  assert.match(main, /chosen: \(\) => placesTogether\.chosen\(\), powerChecked: cloudAwakeNow, quietMs: START_QUIET_MS,/, "so does the link's first pairing on by default");
+  assert.match(main, /computer: \(\) => togetherComputer\(\{ cloudHome: Boolean\(homeWindow\.cloudOrigin\(\)\), ownHome: Boolean\(ownHome\?\.origin\(\)\), profile: cleanWorkspace\.profile\(\), running: runningDataDir \}\)/);
   assert.match(main, /focused: \(\) => powerMonitor\.getSystemIdleState\(60\) !== "locked" && Boolean\(mainWindow && !mainWindow\.isDestroyed\(\) && mainWindow\.isFocused\(\)\)/);
   assert.equal(main.match(/places-together:/g).length, 1, "main sends only that the list changed, never the list");
   const preload = readFileSync(join(HERE, "preload.cjs"), "utf8");

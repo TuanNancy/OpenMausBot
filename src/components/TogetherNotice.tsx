@@ -18,17 +18,19 @@ export function TogetherNotice({ onClose }: { onClose: () => void }) {
   const [commands, setCommands] = useState<boolean | null>(null);
   const [busy, setBusy] = useState<"list" | "commands" | null>(null);
   const [failed, setFailed] = useState(false);
+  const [touched, setTouched] = useState(false);
   useEffect(() => {
     if (told.current) return;
     told.current = true;
     void togetherNoticeShown();
   }, []);
   useEffect(() => { if (commands === null && typeof together?.commands === "boolean") setCommands(together.commands); }, [together?.commands, commands]);
-  const on = together?.on !== false;
+  // Until the person turns it, the notice's own drawing is turning it on: never shown off for the moment main takes.
+  const on = touched ? together?.on === true : together?.on !== false || together?.notice === true;
   const done = () => { togetherNoticeDone(); onClose(); };
   const turnList = () => {
     if (busy) return;
-    setBusy("list"); setFailed(false);
+    setBusy("list"); setFailed(false); setTouched(true);
     togetherNoticeDone();
     void setPlacesTogether(!on, "notice").catch(() => setFailed(true)).finally(() => setBusy(null));
   };

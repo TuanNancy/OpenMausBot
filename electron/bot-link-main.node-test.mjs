@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { linkedAddress } from "./bot-link-address.mjs";
-import { createBotLinkMain, OUTDATED_RETRY_MS, RETRY_MS } from "./bot-link-main.mjs";
+import { createBotLinkMain, DEFAULT_RETRY_MS, OUTDATED_RETRY_MS, RETRY_MS } from "./bot-link-main.mjs";
 
 const CLOUD = "https://omb-u-1.fly.dev";
 
@@ -252,8 +252,9 @@ test("\"asleep\" goes with when main first heard it: the same word keeps its tim
   assert.deepEqual(sleeps(), [1_000_000, 1_000_000, 1_120_000, 1_180_000]);
 });
 
-test("on by default (never chosen, notice seen): it links like a switch turned on, but never pairs with a Cloud the Admin says sleeps", async (t) => {
-  const h = harness({ deps: (the) => ({ wanted: () => the.byDefault && Boolean(the.origin), switchedOff: () => !the.byDefault, chosen: () => null }) });
+test("on by default (never chosen, notice seen): it links like a switch turned on, but only after a quiet start and the Admin's fresh word that the Cloud is awake", async (t) => {
+  const h = harness({ deps: (the) => ({ wanted: () => the.byDefault && Boolean(the.origin), switchedOff: () => !the.byDefault, chosen: () => null, quietMs: 15_000,
+    powerChecked: async () => { the.checks = (the.checks ?? 0) + 1; return the.adminAnswers !== false; } }) });
   t.after(() => h.link.close());
   h.the.asleep = true;
   await h.link.look();
@@ -262,7 +263,17 @@ test("on by default (never chosen, notice seen): it links like a switch turned o
   assert.equal(h.pairs(), 0, "the default turning on is not the person's own turn on: a sleeping Cloud stays asleep");
   h.the.asleep = false;
   await h.link.look();
-  assert.equal(h.pairs(), 1, "paired once the Admin says it is awake");
+  assert.deepEqual([h.pairs(), h.the.checks ?? 0], [0, 0], "nothing in the app's first seconds, not even the Admin");
+  h.the.clock += 15_000;
+  h.the.adminAnswers = false;
+  await h.link.look();
+  assert.deepEqual([h.pairs(), h.the.checks], [0, 1], "the Admin could not say just now: My Cloud is not asked");
+  await h.link.look();
+  assert.equal(h.the.checks, 1, "and the Admin is not asked again for a while");
+  h.the.clock += DEFAULT_RETRY_MS;
+  h.the.adminAnswers = true;
+  await h.link.look();
+  assert.equal(h.pairs(), 1, "paired once the Admin says just now that it is awake");
   assert.equal(h.server.on, true);
   h.the.byDefault = false;
   await h.link.look();

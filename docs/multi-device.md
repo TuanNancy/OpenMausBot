@@ -15,7 +15,7 @@ to the other by itself. Unless both computers open the same home (below), each h
 empty Inbox, and a bot created on one computer does not appear in the other's list. Engine sign-ins (Claude, Codex and
 the rest) are separate too, because they belong to the machine the bots run on.
 
-Each bot lives in one place, and bots work together within one home. The one exception is a computer and its own My Cloud: with **Settings → MausBot Cloud → This computer and My Cloud together** on (an early feature, off by default), a bot in one can hand work to a bot in the other while both are reachable.
+Each bot lives in one place, and bots work together within one home. The one exception is a computer and its own My Cloud: with **Settings → Plan & billing → This computer and My Cloud together** on, a bot in one can hand work to a bot in the other while both are reachable, and this computer's sidebar lists both places' bots. It is on by default: the desktop app turns it on the first time it shows a short notice about it on this computer's page, with a switch right there to turn it off. Someone who chose either way keeps their choice. When My Cloud is home, it joins the workspace of this computer that is running (This Mac or This PC), never the copy the move left behind. The default never lets My Cloud's bots run commands on this computer; that stays its own switch (the notice has it too, and so does the OpenMausBot icon's menu).
 
 ## One set of bots on every device
 

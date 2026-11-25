@@ -91,3 +91,10 @@ it("Got it, the close button and Escape each close it for good", async () => {
   await act(async () => { q("[data-notice='together-default']")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })); });
   expect([page.noticeDone.mock.calls.length, onClose.mock.calls.length]).toEqual([3, 3]);
 });
+
+it("while main is still turning the default on, the list switch already reads on", async () => {
+  said = state({ on: false, other: null });
+  page.noticeShown.mockImplementationOnce(() => new Promise(() => {}));
+  await render();
+  expect(q("[data-together-notice-list]")!.getAttribute("aria-checked")).toBe("true");
+});
