@@ -3,7 +3,7 @@ import { EMPTY_ONBOARDING, type OnboardingStatus } from "@/lib/onboarding";
 import { withTourReset } from "@/lib/guided-tour";
 import { DESKTOP_NOTICES } from "../../electron/desktop-prefs.mjs";
 import { ANNOUNCEMENT_NOTICE, BOAT_OFFER_NOTICE, CLOUD_INTRO, CLOUD_NOTICE, CLOUD_TRIAL_NOTICE, dismissNotice, dismissNotices, FOLLOWERS, GROK_MOVE_NOTICE, introShown, introStage, launchNotice, localDay, markLaunchNotice, MODELGO_OFFER_NOTICE, MUST_ACT,
-  nextNotice, noticeSeen, NOTICES, OLD_PRO_DISMISSALS, PHONE_UPDATE_NOTICE, phoneUpdateHint, PRODUCT_HUNT_NOTICE, SIMPLE_MODE_NOTICE, STAR_NOTICE, TEAMS_NOTICE, TWO_PLACES_NOTICE, UPDATES_CONSENT_NOTICE, usedBefore, WHATS_NEW_NOTICE, type NoticeFacts,
+  nextNotice, noticeSeen, NOTICES, OLD_PRO_DISMISSALS, PHONE_UPDATE_NOTICE, phoneUpdateHint, PRODUCT_HUNT_NOTICE, SIMPLE_MODE_NOTICE, STAR_NOTICE, TEAMS_NOTICE, TOGETHER_NOTICE, TWO_PLACES_NOTICE, UPDATES_CONSENT_NOTICE, usedBefore, WHATS_NEW_NOTICE, type NoticeFacts,
   type NoticeId } from "./notices";
 
 let storage: Map<string, string>, session: Map<string, string>;
@@ -17,8 +17,8 @@ afterEach(() => vi.unstubAllGlobals());
 const record = (hintsSeen: string[] = []): OnboardingStatus => ({ ...EMPTY_ONBOARDING, completedAt: "2026-09-01", version: 1, hintsSeen });
 const facts = (intro: boolean | null, trial: boolean | null, cloud: boolean | null, star: boolean | null, launch: boolean | null = false, popup: boolean | null = false,
   consent: boolean | null = false, simple: boolean | null = false, boat: boolean | null = false, two: boolean | null = false, grok: boolean | null = false, modelgo: boolean | null = false,
-  phone: boolean | null = false, announcement: boolean | null = false, teams: boolean | null = false): NoticeFacts =>
-  ({ [TEAMS_NOTICE]: teams, [GROK_MOVE_NOTICE]: grok, [PHONE_UPDATE_NOTICE]: phone, [SIMPLE_MODE_NOTICE]: simple, [WHATS_NEW_NOTICE]: popup, [UPDATES_CONSENT_NOTICE]: consent, [TWO_PLACES_NOTICE]: two, [PRODUCT_HUNT_NOTICE]: launch, [CLOUD_INTRO]: intro, [CLOUD_TRIAL_NOTICE]: trial, [CLOUD_NOTICE]: cloud,
+  phone: boolean | null = false, announcement: boolean | null = false, teams: boolean | null = false, together: boolean | null = false): NoticeFacts =>
+  ({ [TEAMS_NOTICE]: teams, [GROK_MOVE_NOTICE]: grok, [PHONE_UPDATE_NOTICE]: phone, [TOGETHER_NOTICE]: together, [SIMPLE_MODE_NOTICE]: simple, [WHATS_NEW_NOTICE]: popup, [UPDATES_CONSENT_NOTICE]: consent, [TWO_PLACES_NOTICE]: two, [PRODUCT_HUNT_NOTICE]: launch, [CLOUD_INTRO]: intro, [CLOUD_TRIAL_NOTICE]: trial, [CLOUD_NOTICE]: cloud,
     [MODELGO_OFFER_NOTICE]: modelgo, [BOAT_OFFER_NOTICE]: boat, [ANNOUNCEMENT_NOTICE]: announcement, [STAR_NOTICE]: star });
 const none = () => false;
 const DAY = 86_400_000, NOON = new Date(2026, 9, 9, 12).getTime();
@@ -37,7 +37,7 @@ it("is one queue: the Simple mode popup first, then What's new, the product-upda
   expect(nextNotice(facts(true, true, true, true, true, true, true, true), none)).toBe(SIMPLE_MODE_NOTICE);
   expect(nextNotice(facts(true, true, true, true, true, true, true, null), none), "nothing shows while the Simple mode popup waits").toBeNull();
   expect(nextNotice(facts(true, true, true, true, true, true, true, true), id => id === SIMPLE_MODE_NOTICE)).toBe(WHATS_NEW_NOTICE);
-  expect(NOTICES).toEqual([TEAMS_NOTICE, GROK_MOVE_NOTICE, PHONE_UPDATE_NOTICE, SIMPLE_MODE_NOTICE, WHATS_NEW_NOTICE, UPDATES_CONSENT_NOTICE, TWO_PLACES_NOTICE, PRODUCT_HUNT_NOTICE, CLOUD_INTRO, CLOUD_TRIAL_NOTICE, CLOUD_NOTICE, MODELGO_OFFER_NOTICE, BOAT_OFFER_NOTICE, ANNOUNCEMENT_NOTICE, STAR_NOTICE]);
+  expect(NOTICES).toEqual([TEAMS_NOTICE, GROK_MOVE_NOTICE, PHONE_UPDATE_NOTICE, TOGETHER_NOTICE, SIMPLE_MODE_NOTICE, WHATS_NEW_NOTICE, UPDATES_CONSENT_NOTICE, TWO_PLACES_NOTICE, PRODUCT_HUNT_NOTICE, CLOUD_INTRO, CLOUD_TRIAL_NOTICE, CLOUD_NOTICE, MODELGO_OFFER_NOTICE, BOAT_OFFER_NOTICE, ANNOUNCEMENT_NOTICE, STAR_NOTICE]);
   expect(nextNotice(facts(true, true, true, true, true, false, false, false, false, true), none), "bots in two places come before any promotion").toBe(TWO_PLACES_NOTICE);
   expect(nextNotice(facts(true, true, true, true, true, false, true, false, false, true), none), "after the product-updates question").toBe(UPDATES_CONSENT_NOTICE);
   expect(nextNotice(facts(true, true, true, true, true, false, false, false, false, null), none), "nothing lower shows while main hasn't answered").toBeNull();
@@ -296,4 +296,14 @@ it("a card from the announcements file follows the launch's notice in the same l
     expect(nextNotice(held, popupSeen, WHATS_NEW_NOTICE, true), `${name}: held for that notice's launch`).toBeNull();
   expect(nextNotice(remote({ popup: false, trial: true }), none, CLOUD_TRIAL_NOTICE, true), "and follows it there").toBe(ANNOUNCEMENT_NOTICE);
   expect(nextNotice(remote({ card: false }), popupSeen, WHATS_NEW_NOTICE, true), "none due (one a launch, a sponsor a week): nothing").toBeNull();
+});
+
+it("the notice that bots show together by default comes after the notices to act on and ahead of the rest, and holds the queue while main has not said", () => {
+  const all = (together: boolean | null) => facts(true, true, true, true, true, true, true, true, true, true, false, false, false, false, false, together);
+  expect(nextNotice(all(true), none)).toBe(TOGETHER_NOTICE);
+  expect(nextNotice(all(null), none)).toBeNull();
+  expect(nextNotice(all(false), none)).toBe(SIMPLE_MODE_NOTICE);
+  expect(nextNotice({ ...all(true), [PHONE_UPDATE_NOTICE]: true }, none)).toBe(PHONE_UPDATE_NOTICE);
+  expect(nextNotice(all(true), none, SIMPLE_MODE_NOTICE), "not in a launch another notice took").toBe(SIMPLE_MODE_NOTICE);
+  expect(nextNotice(all(true), none, TOGETHER_NOTICE, true), "closed, it does not come back in the same launch; only a follower may").toBe(UPDATES_CONSENT_NOTICE);
 });

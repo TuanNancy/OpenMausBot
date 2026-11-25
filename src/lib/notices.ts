@@ -14,6 +14,8 @@ export const CLOUD_NOTICE = "cloud-notice";
 export const STAR_NOTICE = "github-star-dismissed";
 /** Bots on this computer and on another place of the person's (two-places.ts): dismissed per place, by main. */
 export const TWO_PLACES_NOTICE = "two-places";
+/** "This computer and My Cloud together" is on by default now: once per person on this computer (main keeps that). */
+export const TOGETHER_NOTICE = "together-default";
 export const PRODUCT_HUNT_NOTICE = "product-hunt-launch-2026-10";
 export const PRODUCT_HUNT_URL = "https://www.producthunt.com/products/mausbot";
 export const PRODUCT_HUNT_UNTIL = Date.UTC(2026, 10, 1);
@@ -39,6 +41,7 @@ export const NOTICES = [
   TEAMS_NOTICE,
   GROK_MOVE_NOTICE,
   PHONE_UPDATE_NOTICE,
+  TOGETHER_NOTICE,
   SIMPLE_MODE_NOTICE,
   WHATS_NEW_NOTICE,
   UPDATES_CONSENT_NOTICE,

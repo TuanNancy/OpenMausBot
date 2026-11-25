@@ -5,7 +5,7 @@ import test from "node:test";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
-import { botRow, botRows, PREVIEW_MAX, previewOf, CLOUD_EVERY_MS, createPlacesTogether, FRESH_MS, installPlacesTogether, LOOK_EVERY_MS, OPEN_WAIT_MS, makesNewBots, NEW_BOT_ACK_MS, NEW_BOT_WAIT_MS, otherHome, parseTogether, readyAis } from "./places-together.mjs";
+import { botRow, botRows, PREVIEW_MAX, previewOf, CLOUD_EVERY_MS, createPlacesTogether, FRESH_MS, installPlacesTogether, LOOK_EVERY_MS, OPEN_WAIT_MS, makesNewBots, NEW_BOT_ACK_MS, NEW_BOT_WAIT_MS, otherHome, parseTogether, readTogether, readyAis, START_QUIET_MS, togetherComputer } from "./places-together.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLOUD = "https://mine.cloud.test";
@@ -35,6 +35,7 @@ function setup(over = {}) {
     now: () => f.clock,
     setTimer: (run, ms) => { f.tick = { run, ms }; return {}; }, clearTimer: () => { f.cleared += 1; },
     later: (run, ms) => { const timer = { run, ms, cancelled: false }; f.timeouts.push(timer); return timer; }, cancelLater: (timer) => { if (timer) timer.cancelled = true; },
+    startQuietMs: 0,
     ...over.deps,
   });
   /** The next read of My Cloud is due: a minute has passed. */
@@ -48,7 +49,7 @@ test("the switch starts off, and off reads nothing, keeps nothing and starts no 
   f.together.linkChanged();
   assert.equal(parseTogether(null), false);
   assert.equal(parseTogether({ v: 1, on: "yes" }), false);
-  assert.deepEqual(f.together.state("computer"), { v: 1, available: true, on: false, here: "computer", other: null });
+  assert.deepEqual(f.together.state("computer"), { v: 1, available: true, on: false, here: "computer", other: null, notice: true, commands: false }, "never chosen: off until its notice is shown");
   await f.together.refresh("cloud");
   assert.equal(f.together.open("computer", "nova"), false);
   f.together.arrived();
@@ -474,8 +475,9 @@ test("only this computer's page and My Cloud's own page are answered", async () 
   const handlers = new Map();
   const f = setup();
   installPlacesTogether({ ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, asking: (event) => event.page, together: f.together });
-  assert.deepEqual([...handlers.keys()], ["places-together:state", "places-together:set", "places-together:open", "places-together:new-bot-choice", "places-together:new-bot", "places-together:new-bot-heard"]);
-  for (const handler of handlers.values()) assert.throws(() => handler({ page: null }, "nova"), /Only this computer's page and My Cloud's page/);
+  assert.deepEqual([...handlers.keys()], ["places-together:state", "places-together:set", "places-together:open", "places-together:new-bot-choice", "places-together:new-bot", "places-together:new-bot-heard",
+    "places-together:notice-shown", "places-together:notice-done", "places-together:commands", "places-together:rail-set"]);
+  for (const [channel, handler] of handlers) assert.throws(() => handler({ page: null }, "nova"), channel === "places-together:rail-set" ? /Only the window's rail/ : /Only this computer's page and My Cloud's page/);
   assert.equal(handlers.get("places-together:state")({ page: "local" }).here, "computer");
   assert.equal(handlers.get("places-together:state")({ page: "cloud" }).here, "cloud");
   assert.equal(handlers.get("places-together:set")({ page: "local" }, "yes").on, false, "only true turns it on");
@@ -497,7 +499,8 @@ test("main wires it to the one rule for this app's own pages, and the preload of
   const preload = readFileSync(join(HERE, "preload.cjs"), "utf8");
   assert.match(preload.match(/const REMOTE_SAFE = new Set\(\[([^\]]*)\]\)/)[1], /"placesTogether"/);
   const bridge = preload.slice(preload.indexOf("  placesTogether: "), preload.indexOf("  twoPlaces: {"));
-  assert.deepEqual(bridge.match(/"places-together:[a-z-]+"/g), ['"places-together:state"', '"places-together:set"', '"places-together:open"', '"places-together:changed"', '"places-together:changed"', '"places-together:new-bot-choice"', '"places-together:new-bot"']);
+  assert.deepEqual(bridge.match(/"places-together:[a-z-]+"/g), ['"places-together:state"', '"places-together:set"', '"places-together:open"', '"places-together:changed"', '"places-together:changed"',
+    '"places-together:notice-shown"', '"places-together:notice-done"', '"places-together:commands"', '"places-together:new-bot-choice"', '"places-together:new-bot"']);
 });
 
 test("the ＋'s other place: that place opens and is told to make the bot itself, once its page has loaded", async () => {
@@ -729,4 +732,195 @@ test("the preload forgets a new bot nobody listened for: when main says so, and 
   late.api.placesTogether.onNewBot(() => { made += 1; });
   assert.equal(made, 0, "a page that starts listening later, such as after a sign-in, makes no bot");
   assert.deepEqual(late.invoked, []);
+});
+
+/** A person signed in, with "Let your Clouds run commands on this computer" as `lent`, and what the notice's switch and the
+ * person's own turn on did to it. */
+function withCommands(over = {}, lent = false) {
+  const c = { lent, set: [], turnedOn: 0 };
+  const f = setup({ ...over, deps: { ...over.deps, commands: { on: () => c.lent, set: (on) => { c.set.push(on); c.lent = on; } }, turnedOn: () => { c.turnedOn += 1; c.lent = true; } } });
+  return { f, c };
+}
+
+test("on by default: a person who never chose has it on from the moment this computer's page showed the notice, and not before", async () => {
+  const { f, c } = withCommands({ saved: null });
+  assert.equal(f.together.on(), false);
+  assert.equal(f.together.switchedOff(), true, "the link stays off too");
+  assert.equal(f.together.chosen(), null);
+  await f.together.refresh("cloud");
+  assert.deepEqual(f.asked, [], "nothing is read before the notice");
+  assert.equal(f.together.noticeShown("cloud"), false, "My Cloud's page never turns the default on");
+  assert.equal(f.together.on(), false);
+  assert.equal(f.together.noticeShown("computer"), true);
+  assert.equal(f.together.on(), true);
+  assert.equal(f.together.switchedOff(), false);
+  assert.equal(f.together.chosen(), null, "still never chosen: the person's own choice stays theirs to make");
+  assert.deepEqual(f.saved, { v: 1, noticed: { "acct-a": 1_000 } }, "no `on`: an older app reads the file as off");
+  assert.equal(f.together.state("computer").notice, true, "the notice stays due until it is closed");
+  await f.together.refresh("cloud");
+  assert.equal(f.cloudAsked("/api/bots?messages=3"), 1, "now My Cloud's bots are read, under the list's own rules");
+  assert.deepEqual([c.set, c.turnedOn, c.lent], [[], 0, false], "the default never lets My Cloud run commands here");
+});
+
+test("the notice shows once: closed, it never shows again, after a restart too, and the default stays on", () => {
+  const { f } = withCommands({ saved: null });
+  f.together.noticeShown("computer");
+  const reopened = withCommands({ saved: f.saved }).f;
+  assert.equal(reopened.together.state("computer").notice, true, "shown but never closed (the app quit first): it shows again");
+  assert.equal(reopened.together.on(), true);
+  f.together.noticeDone("computer");
+  assert.equal(f.together.state("computer").notice, undefined);
+  const later = withCommands({ saved: f.saved }).f;
+  assert.equal(later.together.state("computer").notice, undefined, "closed: never again");
+  assert.equal(later.together.on(), true, "and still on");
+  assert.equal(later.together.noticeShown("computer"), false, "a stale page cannot show it again");
+});
+
+test("a person who chose keeps their choice: off stays off, on stays on, and neither sees the notice", async () => {
+  const off = withCommands({ saved: { v: 1, on: false } });
+  assert.equal(off.f.together.state("computer").notice, undefined);
+  assert.equal(off.f.together.noticeShown("computer"), false);
+  assert.equal(off.f.together.on(), false);
+  await off.f.together.refresh("cloud");
+  assert.deepEqual(off.f.asked, []);
+  assert.deepEqual(off.f.saved, { v: 1, on: false });
+  const on = withCommands({ saved: { v: 1, on: true } });
+  assert.equal(on.f.together.state("computer").notice, undefined);
+  assert.equal(on.f.together.on(), true);
+  assert.equal(on.f.together.chosen(), true);
+  assert.deepEqual(on.c.set, []);
+});
+
+test("touching the switch anywhere ends the notice: off in the notice gives back today's two lists at once and lends nothing", async () => {
+  const { f, c } = withCommands({ saved: null });
+  f.together.noticeShown("computer");
+  await f.together.refresh("cloud");
+  assert.equal(f.together.state("computer").other.bots.length, 2);
+  f.together.noticeDone("computer");
+  const state = f.together.set("computer", false);
+  assert.deepEqual(state, { v: 1, available: true, on: false, here: "computer", other: null }, "the other place's rows are gone and no notice is due");
+  assert.equal(f.saved.on, false);
+  assert.equal(f.together.switchedOff(), true, "the link ends");
+  assert.deepEqual([c.set, c.turnedOn], [[], 0]);
+  const restarted = withCommands({ saved: f.saved }).f;
+  assert.equal(restarted.together.on(), false, "the person's off is kept");
+  assert.equal(restarted.together.state("computer").notice, undefined);
+  const settings = withCommands({ saved: null });
+  settings.f.together.set("computer", false);
+  assert.equal(settings.f.together.state("computer").notice, undefined, "turned off in Settings before the notice ever showed: it never shows");
+  assert.equal(settings.f.together.noticeShown("computer"), false);
+});
+
+test("running commands: the notice's own switch, as the person has it; the person's own turn on of the joining still lends it", () => {
+  const had = withCommands({ saved: null }, true);
+  assert.equal(had.f.together.state("computer").commands, true, "a grant the person had shows as on");
+  had.f.together.noticeShown("computer");
+  assert.equal(had.c.lent, true, "and stays as it was");
+  const never = withCommands({ saved: null });
+  never.f.together.noticeShown("computer");
+  assert.equal(never.f.together.state("computer").commands, false);
+  assert.equal(never.f.together.setCommands("computer", true), true);
+  assert.deepEqual(never.c.set, [true]);
+  assert.equal(never.f.together.setCommands("computer", false), false);
+  assert.deepEqual(never.c.set, [true, false]);
+  assert.throws(() => never.f.together.setCommands("cloud", true), /this computer's page/);
+  const gone = withCommands({ saved: null, deps: { computer: () => null } });
+  assert.throws(() => gone.f.together.setCommands("computer", true), /this computer's page/, "not offered: not turned here");
+  const again = withCommands({ saved: null });
+  again.f.together.noticeShown("computer");
+  again.f.together.set("computer", false, { notice: true });
+  again.f.together.set("computer", true, { notice: true });
+  assert.equal(again.c.turnedOn, 0, "off and on again in the notice: the joining only, never the grant");
+  const byHand = withCommands({ saved: null });
+  byHand.f.together.set("computer", true);
+  assert.equal(byHand.c.turnedOn, 1, "turned on by hand (Settings or the rail), it comes with the grant as before");
+  assert.equal(byHand.f.together.state("computer").notice, undefined);
+});
+
+test("no read of My Cloud at the app's start: the first waits START_QUIET_MS, whatever a page asks", async () => {
+  const f = setup({ deps: { startQuietMs: START_QUIET_MS } });
+  f.together.state("computer");
+  await f.together.refresh("cloud");
+  await settle();
+  assert.equal(f.asked.filter(([side]) => side !== "computer").length, 0, "neither the Admin nor My Cloud");
+  f.clock += START_QUIET_MS;
+  await f.together.refresh("cloud");
+  assert.deepEqual(f.asked.map(([side]) => side), ["admin", "cloud"]);
+  assert.equal(START_QUIET_MS >= 10_000, true);
+});
+
+test("on by default, a sleeping Cloud is never asked or woken: its list says asleep, with no error", async () => {
+  const { f } = withCommands({ saved: null });
+  f.cloud.asleep = true;
+  f.together.noticeShown("computer");
+  await f.together.refresh("cloud");
+  f.later();
+  await f.together.refresh("cloud");
+  assert.deepEqual(f.asked, [], "not even the Admin is asked while it is known asleep");
+  assert.deepEqual(f.together.state("computer").other, { home: "cloud", state: "asleep", bots: [] });
+});
+
+test("the default is per account: another account signed in here has not seen the notice, so it is off for them", () => {
+  const { f } = withCommands({ saved: null });
+  f.together.noticeShown("computer");
+  f.cloud = { ...f.cloud, account: "acct-b" };
+  assert.equal(f.together.on(), false);
+  assert.equal(f.together.state("computer").notice, true);
+  f.cloud = { ...f.cloud, account: null };
+  assert.equal(f.together.noticeShown("computer"), false, "no account: nothing is noted");
+});
+
+test("a switch file that can't be read is off and shows no notice, and leaves a link alone; one that makes no sense is off", () => {
+  const busy = setup({ deps: { pref: { read: () => { throw Object.assign(new Error("busy"), { code: "EBUSY" }); }, write: () => {} } } });
+  assert.equal(busy.together.on(), false);
+  assert.equal(busy.together.state("computer").notice, undefined);
+  assert.equal(busy.together.switchedOff(), false);
+  const missing = () => { throw Object.assign(new Error("gone"), { code: "ENOENT" }); };
+  assert.equal(readTogether(missing).choice, null);
+  assert.equal(readTogether(() => ({ v: 2, on: true })).choice, false);
+  assert.equal(readTogether(() => ({ v: 1, on: "yes" })).choice, false);
+  assert.equal(readTogether(() => ({ v: 1, noticed: {} })).choice, null);
+});
+
+test("which of this computer's workspaces joins My Cloud: its own server with this computer home; the workspace that runs with My Cloud home; none for the frozen copy or a server of their own as home", () => {
+  assert.equal(togetherComputer({ cloudHome: false, ownHome: false, profile: null, running: "/data/omb" }), "computer:/data/omb");
+  assert.equal(togetherComputer({ cloudHome: true, ownHome: false, profile: "default", running: "/data/omb-profiles/default" }), "profile:default");
+  assert.equal(togetherComputer({ cloudHome: true, ownHome: false, profile: null, running: "/data/omb" }), null, "the frozen copy a move left admits no turns");
+  assert.equal(togetherComputer({ cloudHome: true, ownHome: false, profile: null, running: "/data/omb-clean" }), null, "the clean workspace");
+  assert.equal(togetherComputer({ cloudHome: false, ownHome: true, profile: null, running: "/data/omb" }), null);
+});
+
+test("My Cloud as home: offered (and on by default) while a workspace of this computer's own runs; another one has lists of its own; the frozen copy has none", async () => {
+  let here = "profile:default";
+  const { f } = withCommands({ saved: null, deps: { computer: () => here } });
+  assert.equal(f.together.state("computer").available, true);
+  assert.equal(f.together.state("computer").notice, true);
+  f.together.noticeShown("computer");
+  await f.together.refresh("cloud");
+  assert.deepEqual(f.together.state("computer").other.bots.map((row) => row.id), ["scout", "nova"]);
+  assert.equal(f.together.state("cloud").other.bots.length, 0, "My Cloud's page asks for this computer's rows as before");
+  const changes = f.changes;
+  here = "profile:work";
+  assert.equal(f.together.state("computer").other.state, "loading", "another workspace: the last one's list is dropped");
+  assert.equal(f.changes > changes, true);
+  here = null;
+  assert.deepEqual(f.together.state("computer"), { v: 1, available: false, on: true, here: "computer", other: null }, "the frozen copy runs: nothing is offered or read");
+  assert.equal(f.together.on(), false);
+  f.asked.length = 0;
+  await f.together.refresh("computer");
+  assert.deepEqual(f.asked, []);
+});
+
+test("the rail turns the same switch from a circle's menu, only from the window's rail, and turning it on there lends commands as Settings does", () => {
+  const handlers = new Map();
+  const { f, c } = withCommands({ saved: null });
+  installPlacesTogether({ ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, asking: (event) => event.page, rail: (event) => event.rail === true, together: f.together });
+  assert.throws(() => handlers.get("places-together:rail-set")({ page: "local" }, true), /Only the window's rail/);
+  assert.equal(handlers.get("places-together:rail-set")({ rail: true }, true), true);
+  assert.deepEqual([f.saved.on, c.turnedOn], [true, 1]);
+  assert.equal(handlers.get("places-together:rail-set")({ rail: true }, false), false);
+  assert.equal(f.saved.on, false);
+  assert.deepEqual(f.together.offered(), { on: false });
+  const none = withCommands({ saved: null, deps: { computer: () => null } });
+  assert.equal(none.f.together.offered(), null, "where it is not offered the circles show nothing");
 });

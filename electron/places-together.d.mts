@@ -40,13 +40,17 @@ export interface PlacesTogetherState {
   /** The other place's bots while the switch is on. `state`: how that place is doing: asleep, waking and offline keep the
    * bots it gave last; "signin" is a My Cloud this window has not signed in to yet, which lists none. */
   other: { home: BotHome; state: "ready" | "loading" | "asleep" | "waking" | "offline" | "signin"; bots: PlaceBotRow[]; newBot?: boolean } | null;
+  /** This computer's page shows the one-time notice that this is on by default: the person never chose, and has not closed it. */
+  notice?: true;
+  /** With the notice: whether My Cloud's bots may run commands on this computer now (the notice's second switch). */
+  commands?: boolean;
 }
 
 /** `window.ogb.placesTogether`: this computer's page and My Cloud's own page. */
 export interface PlacesTogetherBridge {
   state(): Promise<PlacesTogetherState>;
   /** Turning it on is this computer's page's alone; main refuses it from My Cloud's page. */
-  set(on: boolean): Promise<PlacesTogetherState>;
+  set(on: boolean, from?: "notice"): Promise<PlacesTogetherState>;
   /** Opens the other place at one of its listed bots. False when main does not list that bot. */
   open(botId: string): Promise<boolean>;
   onChanged(callback: () => void): () => void;
@@ -57,6 +61,12 @@ export interface PlacesTogetherBridge {
   newBot(): Promise<boolean>;
   /** The other place asked this one to make a new bot. */
   onNewBot(callback: () => void): () => void;
+  /** This computer's page drew the notice of the default: from now on it is on. True when it is on now. Older apps lack it. */
+  noticeShown?(): Promise<boolean>;
+  /** The notice's second switch: whether My Cloud's bots may run commands on this computer. What it is now. */
+  setCommands?(on: boolean): Promise<boolean>;
+  /** The person closed the notice: it never shows again. */
+  noticeDone?(): Promise<void>;
 }
 
 export interface NewBotChoice {
@@ -67,6 +77,24 @@ export interface NewBotChoice {
 }
 
 export const PLACES_TOGETHER_FILE: string;
+export const START_QUIET_MS: number;
+export function togetherComputer(input: { cloudHome: boolean; ownHome: boolean; profile: string | null; running: string | null }): string | null;
+export function readTogether(read: () => unknown): { choice: boolean | null; kept: Record<string, unknown>; unreadable?: true };
 export const PREVIEW_MAX: number;
 export const PREVIEW_LOOK: number;
 export function otherHome(asking: "local" | "cloud" | BotHome): BotHome;
+/** Main's side of the switch (places-together.mjs), as a test drives it: the deps are its own, loosely typed here. */
+export interface PlacesTogether {
+  on(): boolean;
+  offered(): { on: boolean } | null;
+  state(asking: BotHome): PlacesTogetherState;
+  set(asking: BotHome, value: boolean, options?: { notice?: boolean }): PlacesTogetherState;
+  noticeShown(asking: BotHome): boolean;
+  noticeDone(asking: BotHome): void;
+  setCommands(asking: BotHome, value: boolean): boolean;
+  switchedOff(): boolean;
+  chosen(): boolean | null;
+  close(): void;
+}
+export function createPlacesTogether(deps: Record<string, unknown>): PlacesTogether;
+export function installPlacesTogether(options: { ipcMain: { handle(channel: string, handler: (event: unknown, ...args: unknown[]) => unknown): void }; asking(event: unknown): "local" | "cloud" | null; together: PlacesTogether; rail?(event: unknown): boolean }): PlacesTogether;

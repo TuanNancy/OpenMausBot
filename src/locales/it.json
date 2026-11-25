@@ -11377,7 +11377,6 @@
   "together.state.offlineCloud": "La mia nuvola non può essere raggiunta in questo momento.",
   "together.state.offlineComputer": "I bot del computer non possono essere letti in questo momento.",
   "together.switch.title": "Questo computer e Il mio Cloud insieme",
-  "together.switch.line": "Disattivato per impostazione predefinita. I bot del Cloud e quelli di questo computer compaiono in un unico elenco, e ognuno si apre dove si trova.",
   "together.switch.commands": "Attivandolo, i bot di Il mio Cloud possono anche eseguire comandi su questo computer; puoi disattivarlo dall'icona di OpenMausBot.",
   "together.switch.failed": "Non è stato possibile salvare. Riprova.",
   "together.mark.workingCloud": "Al lavoro sul mio Cloud ora",

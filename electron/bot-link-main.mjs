@@ -16,7 +16,7 @@
 // team's Cloud. The link's sign-in goes from My Cloud to this computer's server and nowhere else; no page sees it.
 import { linkedAddress } from "./bot-link-address.mjs";
 import { BACKGROUND_HEADERS } from "./cloud-power.mjs";
-import { parseTogether } from "./places-together.mjs";
+import { readTogether } from "./places-together.mjs";
 
 const STATE = "/api/bot-link";
 const PAIR = "/api/bot-link/pair";
@@ -34,7 +34,9 @@ async function body(response) {
 /**
  * @param {{
  *   wanted(): boolean,
- *   pref: { read(): unknown },
+ *   pref?: { read(): unknown },
+ *   switchedOff?(): boolean,
+ *   chosen?(): boolean | null,
  *   localRequest(route: string, init?: RequestInit): Promise<Response>,
  *   fetch: typeof fetch,
  *   cloud(): { origin: string | null, account: string | null, asleep: boolean, since?: string | number | null, signedOut?: boolean },
@@ -44,12 +46,14 @@ async function body(response) {
  *   watchMs?: number,
  *   now?(): number,
  * }} deps `wanted()`: the switch is on and both places exist. `pref`: the switch's own file: turning it off ends a
- * link (My Cloud not being seen for a moment leaves it alone, and so does a file that cannot be read). `cloud()`: My
+ * link (My Cloud not being seen for a moment leaves it alone). `switchedOff()` and `chosen()` (places-together.mjs) stand
+ * in for it: off also while the person never chose and has not seen the notice of the default; `chosen()` is the person's
+ * own choice, and only their own turn on pairs with a Cloud the Admin says sleeps. `cloud()`: My
  * Cloud's address and the signed-in account while the person has them, whether the Admin says it sleeps now (and
  * since when, in its words: a new `since` is a new word), and whether the person signed out. `cloudName()`: what the app calls My Cloud, in the person's language. `changed()`: the
  * addresses `address` gives changed (the link came, went, or is another Cloud's now).
  */
-export function createBotLinkMain({ wanted, pref, localRequest, fetch: fetchImpl, cloud, cloudName, changed = () => {}, log = () => {}, watchMs = WATCH_MS, now = Date.now }) {
+export function createBotLinkMain({ wanted, pref = null, switchedOff = null, chosen = null, localRequest, fetch: fetchImpl, cloud, cloudName, changed = () => {}, log = () => {}, watchMs = WATCH_MS, now = Date.now }) {
   const local = async (method, payload) => {
     const response = await localRequest(STATE, { method, signal: AbortSignal.timeout(15_000),
       ...(payload === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }) });
@@ -57,6 +61,7 @@ export function createBotLinkMain({ wanted, pref, localRequest, fetch: fetchImpl
     if (!response?.ok) throw Object.assign(new Error(answer?.error ?? `This computer's server answered ${response?.status}`), { status: response?.status });
     return answer ?? { on: false };
   };
+  /** This computer's server, as the link knows it: read again once another workspace of this computer's runs. */
   let computer = null;
   const thisComputer = async () => {
     if (computer) return computer;
@@ -104,8 +109,10 @@ export function createBotLinkMain({ wanted, pref, localRequest, fetch: fetchImpl
     try { changed(); } catch {}
   };
 
-  const switchedOff = () => { try { return !parseTogether(pref.read()); } catch (error) { return error?.code === "ENOENT"; } };
-  let retryAt = -Infinity, switchWasOn = null, looking = null, idle = false;
+  const readChoice = () => (chosen ? chosen() : readTogether(() => pref?.read()).choice);
+  // A file that can't be read just now leaves a link alone.
+  const isOff = () => { if (switchedOff) return switchedOff(); const read = readTogether(() => pref?.read()); return !read.unreadable && read.choice !== true; };
+  let retryAt = -Infinity, choseOn = null, looking = null, idle = false;
   /** The Admin's "asleep" and when main first heard it, on this computer's clock: heard again when the Admin's `since`
    * moves on or it said awake in between. */
   let heard = null;
@@ -130,9 +137,10 @@ export function createBotLinkMain({ wanted, pref, localRequest, fetch: fetchImpl
     if (!state) return;
     if (state.on) await thisComputer().catch(() => null);
     note(state);
-    const mine = cloud(), off = switchedOff();
-    const justOn = switchWasOn === false && !off;
-    switchWasOn = !off;
+    const mine = cloud(), off = isOff(), own = readChoice() === true;
+    // Only the person's own turn on, never the default's start: a Cloud the Admin says sleeps is left asleep for that.
+    const justOn = choseOn === false && own && !off;
+    choseOn = own;
     if (!state.on) {
       // A link that ended while its Cloud slept or could not be reached: this computer's server tells that Cloud now.
       if (mine.origin && !mine.asleep && Array.isArray(state.ended) && state.ended.includes(mine.origin)) await local("PUT", { cloud: "awake", origin: mine.origin }).catch(() => {});
@@ -168,6 +176,8 @@ export function createBotLinkMain({ wanted, pref, localRequest, fetch: fetchImpl
   void look();
   return {
     look,
+    /** Another of this computer's own workspaces runs now (or the same one started again): its link is its own. */
+    serverChanged() { computer = null; known = null; addressed = ""; retryAt = -Infinity; try { changed(); } catch {} return look(); },
     /** The address over the link of a bot the sidebar lists for `home`: where the other place's bots know it, and where
      * this place's stand-in for it is found. Null while no link of this Cloud and account is on, so a row never carries
      * an address that belongs to another Cloud's or another account's link. */

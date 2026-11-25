@@ -6,7 +6,7 @@ import { createBotLinkMain, OUTDATED_RETRY_MS, RETRY_MS } from "./bot-link-main.
 
 const CLOUD = "https://omb-u-1.fly.dev";
 
-function harness({ origin = CLOUD, pairStatus = 200, on = false, putFails = false, watchMs = 3_600_000 } = {}) {
+function harness({ origin = CLOUD, pairStatus = 200, on = false, putFails = false, watchMs = 3_600_000, deps = {} } = {}) {
   const cloudCalls = [], localCalls = [];
   let server = { on: false };
   const the = { switch: on, asleep: false, origin, account: "account-1", signedOut: false, clock: 1_000_000, unreadable: false, putFails };
@@ -15,7 +15,7 @@ function harness({ origin = CLOUD, pairStatus = 200, on = false, putFails = fals
     wanted: () => the.switch && Boolean(the.origin),
     pref: { read: () => { if (the.unreadable) throw new Error("busy"); return { v: 1, on: the.switch }; } },
     localRequest: async (route, init = {}) => {
-      if (route === "/.well-known/openmausbot/environment") return answer(200, { environmentId: "11111111-1111-4111-8111-111111111111", label: "Sam's Mac" });
+      if (route === "/.well-known/openmausbot/environment") return answer(200, { environmentId: the.environmentId ?? "11111111-1111-4111-8111-111111111111", label: "Sam's Mac" });
       const sent = init.body ? JSON.parse(init.body) : undefined;
       localCalls.push({ method: init.method ?? "GET", ...(sent ? { body: sent } : {}) });
       if (init.method === "PUT" && sent.on === true) {
@@ -35,6 +35,7 @@ function harness({ origin = CLOUD, pairStatus = 200, on = false, putFails = fals
     watchMs,
     changed: () => { the.changes = (the.changes ?? 0) + 1; },
     now: () => the.clock,
+    ...(typeof deps === "function" ? deps(the) : deps),
   });
   const pairs = () => cloudCalls.filter((call) => call.method === "POST").length;
   return { cloudCalls, localCalls, link, the, pairs, set server(next) { server = next; }, get server() { return server; } };
@@ -249,4 +250,35 @@ test("\"asleep\" goes with when main first heard it: the same word keeps its tim
   h.server = { ...h.server, asleep: false };
   await h.link.look();
   assert.deepEqual(sleeps(), [1_000_000, 1_000_000, 1_120_000, 1_180_000]);
+});
+
+test("on by default (never chosen, notice seen): it links like a switch turned on, but never pairs with a Cloud the Admin says sleeps", async (t) => {
+  const h = harness({ deps: (the) => ({ wanted: () => the.byDefault && Boolean(the.origin), switchedOff: () => !the.byDefault, chosen: () => null }) });
+  t.after(() => h.link.close());
+  h.the.asleep = true;
+  await h.link.look();
+  h.the.byDefault = true;
+  await h.link.look();
+  assert.equal(h.pairs(), 0, "the default turning on is not the person's own turn on: a sleeping Cloud stays asleep");
+  h.the.asleep = false;
+  await h.link.look();
+  assert.equal(h.pairs(), 1, "paired once the Admin says it is awake");
+  assert.equal(h.server.on, true);
+  h.the.byDefault = false;
+  await h.link.look();
+  assert.equal(h.server.on, false, "turned off: the link ends");
+});
+
+test("another of this computer's workspaces starts: the link reads its server again and pairs it as itself", async (t) => {
+  const h = harness({ on: true });
+  t.after(() => h.link.close());
+  await h.link.look();
+  assert.equal(h.cloudCalls.find((call) => call.method === "POST").body.computer.id, "11111111-1111-4111-8111-111111111111");
+  h.the.environmentId = "22222222-2222-4222-8222-222222222222";
+  h.server = { on: false };
+  await h.link.serverChanged();
+  const pairs = h.cloudCalls.filter((call) => call.method === "POST");
+  assert.equal(pairs.length, 2);
+  assert.equal(pairs[1].body.computer.id, "22222222-2222-4222-8222-222222222222");
+  assert.equal(h.link.address("computer", "scout"), linkedAddress("22222222-2222-4222-8222-222222222222", "scout"));
 });
