@@ -54,30 +54,40 @@ export function parseTogether(value) {
   return record(value) && value.v === 1 && value.on === true;
 }
 
-/** The switch's file as read: `choice` is the person's (true, false, or null when they never chose: no file, or one that
- * only holds the default's notes), `kept` what a rewrite keeps. A file that can't be read or makes no sense is off, never
- * the default; `unreadable` when reading it failed, which may pass. */
-export function readTogether(read) {
+/** The switch's file as read for `account`: `choice` is that person's (true, false, or null when they never chose), `kept`
+ * what a rewrite keeps. Choices are kept by account (`choices`); a file from before them has one `on` for everyone here,
+ * which stands until the first choice made since. `on` stays written too, the last choice made here, for an older app.
+ * A file that can't be read or makes no sense is off, never the default; `unreadable` when reading it failed, which may
+ * pass. */
+export function readTogether(read, account = null) {
   let value;
   try { value = read(); } catch (error) { return error?.code === "ENOENT" ? { choice: null, kept: { v: 1 } } : { choice: false, kept: { v: 1 }, unreadable: true }; }
   if (value === null || value === undefined) return { choice: null, kept: { v: 1 } };
   if (!record(value) || value.v !== 1) return { choice: false, kept: { v: 1 } };
-  return { choice: typeof value.on === "boolean" ? value.on : value.on === undefined ? null : false, kept: value };
+  return { choice: choiceIn(value, account), kept: value };
+}
+
+/** One person's choice in a readable switch file (readTogether). */
+function choiceIn(kept, account) {
+  if (record(kept.choices)) return typeof account === "string" && typeof kept.choices[account] === "boolean" ? kept.choices[account] : null;
+  return typeof kept.on === "boolean" ? kept.on : kept.on === undefined ? null : false;
 }
 
 const stamped = (map, account) => record(map) && typeof account === "string" && Number.isFinite(map[account]) && map[account] > 0;
 
 /** Which of this computer's own workspaces would join My Cloud, as a key that changes whenever another one runs; null when
  * none can. `cloudHome`: My Cloud is the person's home (their bots moved there). `ownHome`: a server of their own is.
- * `profile`: the workspace of this computer's own that runs now (clean-workspace.mjs; This Mac is `default`), null for the
- * frozen copy a move left or the clean workspace. `running`: the data folder this computer's server runs on.
+ * `frozen`: this computer's data folder holds the move's freeze marker (clean-workspace.mjs `marker()`), known before the
+ * home window knows My Cloud is home. `profile`: the workspace of this computer's own that runs now (This Mac is
+ * `default`), null for the frozen copy a move left or the clean workspace. `running`: the folder this computer's server
+ * runs on.
  *
- * Home = this computer: its own server, as ever. Home = My Cloud: only while a workspace of this computer's own runs: the
- * frozen copy admits no turns and still lists the bots that moved, so it never joins. A server of their own as home: none
- * (not offered yet). */
-export function togetherComputer({ cloudHome, ownHome, profile, running }) {
+ * Home = this computer: its own server, as ever. Bots moved away (home = My Cloud, or the marker says so): only while a
+ * workspace of this computer's own runs: the frozen copy admits no turns and still lists the bots that moved, and the clean
+ * workspace has nothing of the person's, so neither joins. A server of their own as home: none (not offered yet). */
+export function togetherComputer({ cloudHome, ownHome, frozen = false, profile, running }) {
   if (ownHome) return null;
-  if (cloudHome) return typeof profile === "string" && profile ? `profile:${profile}` : null;
+  if (cloudHome || frozen) return typeof profile === "string" && profile ? `profile:${profile}` : null;
   return `computer:${typeof running === "string" ? running : ""}`;
 }
 
@@ -153,7 +163,7 @@ const needsSignIn = (response) => response?.status === 401 || response?.status =
  *   cloud(): { origin: string | null, account: string | null, asleep: boolean },
  *   powerChecked(): Promise<boolean>,
  *   computer(): string | boolean | null,
- *   commands?: { on(): boolean, set(on: boolean): void },
+ *   commands?: { on(): boolean, set(on: boolean): unknown },
  *   local(route: string, init?: RequestInit): Promise<Response>,
  *   cloudFetch(url: string, init?: RequestInit): Promise<Response>,
  *   napped?(): void,
@@ -172,7 +182,8 @@ const needsSignIn = (response) => response?.status === 401 || response?.status =
  * said it sleeps. `powerChecked()`: asks the Admin again whether My Cloud sleeps, true once it answered just now.
  * `computer()`: the workspace of this computer's own that joins My Cloud (togetherComputer), falsy when none does: a new
  * value is another workspace, whose lists are its own. `commands`: "Let your Clouds run commands on this computer"
- * (computer-sharing.mjs): whether it is on, and the notice's own switch for it. `napped()`: My Cloud answered that it
+ * (computer-sharing.mjs): whether it is on now, read from lending itself, and the notice's own switch for it, which turns it
+ * on only through the same question the icon's menu asks (lending-dialogs.mjs). `napped()`: My Cloud answered that it
  * is going to sleep. `shown()`: the place whose page the window shows; "waking" for this app's own screen while My Cloud
  * wakes, "other" for any other place or screen, null while a page loads.
  * `focused()`: the window is the one the person is using: in front, and the screen not locked. `openPlace(home)`: main's
@@ -196,7 +207,7 @@ export function createPlacesTogether({ pref, cloud, powerChecked, computer, loca
   let epoch = 0;
   // The first read of My Cloud waits until the app has been up START_QUIET_MS: as if it had been asked just before.
   const neverAsked = now() - CLOUD_EVERY_MS + startQuietMs;
-  let saved = null, timer = null, pending = null, scope = null, cloudAskedAt = neverAsked, signIn = false, unheard = null;
+  let commandsSeen = null, saved = null, timer = null, pending = null, scope = null, cloudAskedAt = neverAsked, signIn = false, unheard = null;
   const placeShown = () => { const place = shown(); return place === "computer" || place === "cloud" ? place : null; };
 
   /** The file as last read or written: read once, then kept here. */
@@ -206,8 +217,8 @@ export function createPlacesTogether({ pref, cloud, powerChecked, computer, loca
     if (!read.unreadable) saved = read;
     return read;
   };
-  const write = (value) => { pref.write(value); saved = { choice: typeof value.on === "boolean" ? value.on : null, kept: value }; };
-  const chosen = () => file().choice;
+  const write = (value) => { pref.write(value); saved = { kept: value }; };
+  const chosen = () => { const read = file(); return read.unreadable ? false : choiceIn(read.kept, account()); };
   const account = () => cloud().account ?? null;
   /** The default's notes for the signed-in account: the notice was shown, and closed or used. */
   const noted = (key) => stamped(file().kept[key], account());
@@ -378,6 +389,9 @@ export function createPlacesTogether({ pref, cloud, powerChecked, computer, loca
   return {
     /** Whether the switch is on and both places exist: what anything else that joins the two places asks. */
     on: active,
+    /** Whether the switch is on for the signed-in account with My Cloud, whatever runs on this computer now: whether this
+     * computer's own workspace should be started to join it (together-background.mjs). */
+    switchOn: () => Boolean(cloud().origin) && isOn(),
     /** The switch is offered (the person has My Cloud and a workspace of this computer's own runs), and whether it is on:
      * what the rail's circles show in their menu. Null when it is not offered. */
     offered: () => (available() ? { on: isOn() } : null),
@@ -386,20 +400,25 @@ export function createPlacesTogether({ pref, cloud, powerChecked, computer, loca
       sameScope();
       const here = asking === "cloud" ? "cloud" : "computer";
       let notice = {};
-      if (here === "computer" && noticeDue()) { let lent = false; try { lent = commands?.on() === true; } catch {} notice = { notice: true, commands: lent }; }
+      if (here === "computer" && available()) {
+        let lent = false;
+        try { lent = commands?.on() === true; } catch {}
+        notice = { ...(noticeDue() ? { notice: true } : {}), commands: lent };
+      }
       if (!active()) return { v: 1, available: available(), on: isOn(), here, other: null, ...notice };
       watch();
       void refresh(otherHome(here));
       return { v: 1, available: true, on: true, here, other: otherOf(here), ...notice };
     },
-    /** The switch. Off forgets every list. Turned on from this computer's page (Settings, the rail, the notice), it also
+    /** The switch. Off forgets every list. Turned on from Settings on this computer's page, whose words say so, it also
      * lets My Cloud run commands here (`turnedOn`), so the two places work as one with one switch; the person turns that
-     * alone off from the icon's menu. The default never does that, nor the notice of it (`notice`), which has its own
-     * switch for running commands. */
-    set(asking, value, { notice = false } = {}) {
+     * alone off from the icon's menu. The rail's row and the notice (`listOnly`) switch the list alone, and the default
+     * never lends anything. */
+    set(asking, value, { listOnly = false } = {}) {
       const was = isOn(), next = value === true;
-      write({ ...file().kept, v: 1, on: next });
-      if (next && !was && asking === "computer" && !notice) { try { turnedOn(); } catch {} }
+      const { kept } = file(), who = account();
+      write({ ...kept, v: 1, on: next, choices: { ...(record(kept.choices) ? kept.choices : {}), ...(who ? { [who]: next } : {}) } });
+      if (next && !was && asking === "computer" && !listOnly) { try { turnedOn(); } catch {} }
       sameScope();
       tell();
       return this.state(asking);
@@ -417,11 +436,17 @@ export function createPlacesTogether({ pref, cloud, powerChecked, computer, loca
     },
     /** The notice's own switch for "Let My Cloud's bots run commands on this computer", from this computer's page while the
      * joining is offered: the person's own choice, kept as the icon's menu keeps it. What it is now. */
-    setCommands(asking, value) {
+    async setCommands(asking, value) {
       if (asking !== "computer" || !available() || !commands) throw new Error("Turn this from this computer's page.");
-      commands.set(value === true);
+      await commands.set(value === true);
       tell();
       return commands.on();
+    },
+    /** Lending says whether My Cloud may run commands here (it changed, or it says it again): a page showing it asks again. */
+    commandsChanged(on) {
+      if (on === commandsSeen) return;
+      commandsSeen = on;
+      if (available()) tell();
     },
     /** The person closed the notice (Got it, its close button or Escape): it never shows again for this account. */
     noticeDone(asking) {
@@ -515,7 +540,7 @@ export function installPlacesTogether({ ipcMain, asking, together, rail = () => 
   ipcMain.handle("places-together:set", (event, value, from) => {
     const page = side(event);
     if (value === true && page !== "computer") throw new Error("Turn this on from this computer's page.");
-    return together.set(page, value === true, { notice: from === "notice" });
+    return together.set(page, value === true, { listOnly: from === "notice" });
   });
   ipcMain.handle("places-together:open", (event, botId) => together.open(side(event), String(botId)));
   ipcMain.handle("places-together:new-bot-choice", (event) => together.newBotChoice(side(event)));
@@ -527,7 +552,7 @@ export function installPlacesTogether({ ipcMain, asking, together, rail = () => 
   // The rail's own page (this app's, beside whichever place is open): Show bots together in a circle's menu.
   ipcMain.handle("places-together:rail-set", (event, value) => {
     if (!rail(event)) throw new Error("Only the window's rail turns this from a circle's menu.");
-    return together.set("computer", value === true).on;
+    return together.set("computer", value === true, { listOnly: true }).on;
   });
   return together;
 }

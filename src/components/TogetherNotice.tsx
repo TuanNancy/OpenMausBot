@@ -8,14 +8,16 @@ import { Switch } from "./SettingsPrimitives";
 /** The one-time notice of "This computer and My Cloud together" being on by default (electron/places-together.mjs): a
  * card in the corner, like every other notice, that never takes focus or waits for an answer. Drawing it is what turns the
  * default on (main does nothing before). Its first switch turns the joining off at once (back to two separate lists); its
- * second is "Let My Cloud's bots run commands on this computer", as the person has it now, never turned on for them. Got
+ * second is "Let your Clouds' bots run commands on this computer", as lending says it now, never turned on for them, and
+ * turned on only after the same question the OpenMausBot icon's menu asks. Got
  * it, the close button, Escape or either switch, and it never shows again. */
 export function TogetherNotice({ onClose }: { onClose: () => void }) {
   const together = usePlacesTogether();
   // Told once per notice on screen (a kept object, not a ref: notices are also drawn outside a live tree in tests).
   const [told] = useState(() => ({ current: false }));
-  // What the notice found when it was drawn: the person sees the commands switch as it was, and as they then turn it.
-  const [commands, setCommands] = useState<boolean | null>(null);
+  // Lending's own word, live while the notice is up (also when the icon's menu changes it); while the person's own turn
+  // waits on the icon's question, the switch shows where they turned it.
+  const [turning, setTurning] = useState<boolean | null>(null);
   const [busy, setBusy] = useState<"list" | "commands" | null>(null);
   const [failed, setFailed] = useState(false);
   const [touched, setTouched] = useState(false);
@@ -24,7 +26,7 @@ export function TogetherNotice({ onClose }: { onClose: () => void }) {
     told.current = true;
     void togetherNoticeShown();
   }, []);
-  useEffect(() => { if (commands === null && typeof together?.commands === "boolean") setCommands(together.commands); }, [together?.commands, commands]);
+  const commands = turning ?? (typeof together?.commands === "boolean" ? together.commands : null);
   // Until the person turns it, the notice's own drawing is turning it on: never shown off for the moment main takes.
   const on = touched ? together?.on === true : together?.on !== false || together?.notice === true;
   const done = () => { togetherNoticeDone(); onClose(); };
@@ -37,9 +39,9 @@ export function TogetherNotice({ onClose }: { onClose: () => void }) {
   const turnCommands = () => {
     if (busy) return;
     const next = !(commands ?? false);
-    setBusy("commands"); setFailed(false);
+    setBusy("commands"); setFailed(false); setTurning(next);
     togetherNoticeDone();
-    void setTogetherCommands(next).then(setCommands, () => setFailed(true)).finally(() => setBusy(null));
+    void setTogetherCommands(next).catch(() => setFailed(true)).finally(() => { setTurning(null); setBusy(null); });
   };
   return <NoticeCard titleId="together-notice-title" notice="together-default" icon={Merge} title={t("together.notice.title")} onDismiss={done}>
     <p className="mb-3 mt-1 text-[13px] text-ink-secondary">{t("together.notice.body")}</p>

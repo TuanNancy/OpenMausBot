@@ -42,7 +42,8 @@ export interface PlacesTogetherState {
   other: { home: BotHome; state: "ready" | "loading" | "asleep" | "waking" | "offline" | "signin"; bots: PlaceBotRow[]; newBot?: boolean } | null;
   /** This computer's page shows the one-time notice that this is on by default: the person never chose, and has not closed it. */
   notice?: true;
-  /** With the notice: whether My Cloud's bots may run commands on this computer now (the notice's second switch). */
+  /** This computer's page while the switch is offered: whether the person's Clouds may run commands on this computer now,
+   * as lending says it (the notice's second switch). */
   commands?: boolean;
 }
 
@@ -78,7 +79,7 @@ export interface NewBotChoice {
 
 export const PLACES_TOGETHER_FILE: string;
 export const START_QUIET_MS: number;
-export function togetherComputer(input: { cloudHome: boolean; ownHome: boolean; profile: string | null; running: string | null }): string | null;
+export function togetherComputer(input: { cloudHome: boolean; ownHome: boolean; frozen?: boolean; profile: string | null; running: string | null }): string | null;
 export function readTogether(read: () => unknown): { choice: boolean | null; kept: Record<string, unknown>; unreadable?: true };
 export const PREVIEW_MAX: number;
 export const PREVIEW_LOOK: number;
@@ -86,12 +87,14 @@ export function otherHome(asking: "local" | "cloud" | BotHome): BotHome;
 /** Main's side of the switch (places-together.mjs), as a test drives it: the deps are its own, loosely typed here. */
 export interface PlacesTogether {
   on(): boolean;
+  switchOn(): boolean;
   offered(): { on: boolean } | null;
   state(asking: BotHome): PlacesTogetherState;
-  set(asking: BotHome, value: boolean, options?: { notice?: boolean }): PlacesTogetherState;
+  set(asking: BotHome, value: boolean, options?: { listOnly?: boolean }): PlacesTogetherState;
   noticeShown(asking: BotHome): boolean;
   noticeDone(asking: BotHome): void;
-  setCommands(asking: BotHome, value: boolean): boolean;
+  setCommands(asking: BotHome, value: boolean): Promise<boolean>;
+  commandsChanged(on: boolean): void;
   switchedOff(): boolean;
   chosen(): boolean | null;
   close(): void;

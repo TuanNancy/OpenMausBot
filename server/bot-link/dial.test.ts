@@ -230,7 +230,7 @@ async function sleepyCloud(answer: (request: { background: boolean; wait: number
 }
 
 /** A computer's link whose Cloud sleeps: work can be wanted, and what the dialer says of waking is kept. */
-function sleepyLink(origin: string) {
+function sleepyLink(origin: string, { sleeps = true }: { sleeps?: boolean } = {}) {
   let wanted: (person: boolean) => void = () => {};
   const waking: boolean[] = [];
   const link = {
@@ -243,7 +243,7 @@ function sleepyLink(origin: string) {
     setOnline: vi.fn(),
     setLevel: vi.fn(),
     setSleeps: vi.fn(),
-    sleeps: () => true,
+    sleeps: () => sleeps,
     setWaking: (_peer: string, on: boolean) => { waking.push(on); },
     setTransfer: vi.fn(),
     onOutgoing: () => () => {},
@@ -266,6 +266,37 @@ describe("a Cloud that sleeps", () => {
     await settle();
     expect(dialer.state()).toMatchObject({ running: true, asleep: true });
     expect(sleepy.seen).toEqual([]);
+  });
+
+  it("this server starting asks nothing of the Cloud, even one the link never saw asleep, until the app says it is awake", async () => {
+    const sleepy = await sleepyCloud();
+    const { link } = sleepyLink(sleepy.origin, { sleeps: false });
+    const dialer = createDialer({ link, holdMs: 200, firstRetryMs: 1 });
+    cleanups.push(() => dialer.close());
+    dialer.start({ gentle: true });
+    await settle();
+    expect(dialer.state()).toMatchObject({ running: true, asleep: true });
+    expect(sleepy.seen, "a stopped Cloud is not started by this server starting").toEqual([]);
+  });
+
+  it("an awake the app heard before the link parked starts nothing; one heard after it asks the Cloud once", async () => {
+    let clock = 50_000;
+    const sleepy = await sleepyCloud();
+    const { link } = sleepyLink(sleepy.origin);
+    const dialer = createDialer({ link, holdMs: 5_000, firstRetryMs: 1, now: () => clock });
+    cleanups.push(() => dialer.close());
+    dialer.start({ gentle: true });
+    expect(dialer.state()).toMatchObject({ asleep: true, parkedAt: 50_000 });
+    clock = 60_000;
+    dialer.start({ heardAt: 20_000 });
+    dialer.start({ heardAt: 50_000 });
+    await settle();
+    expect(sleepy.seen, "the Admin's awake from before the Cloud went to sleep is stale").toEqual([]);
+    expect(dialer.state()).toMatchObject({ asleep: true });
+    dialer.start({ heardAt: 60_000 });
+    await sleepy.requests(1);
+    expect(sleepy.seen[0], "the first ask since the park, as background work; the held poll that follows is the link's own").toEqual({ background: true, wait: 0 });
+    expect(dialer.state()).toMatchObject({ asleep: false });
   });
 
   it("work a person waits on wakes it with an exchange that is not background; the idle polls after it are background again", async () => {

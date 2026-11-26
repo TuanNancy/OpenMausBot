@@ -11,7 +11,7 @@ let container: HTMLDivElement, root: Root, said: PlacesTogetherState, changed: (
 const state = (over: Partial<PlacesTogetherState> = {}): PlacesTogetherState => ({ v: 1, available: true, on: true, here: "computer",
   other: { home: "cloud", state: "ready", bots: [] }, notice: true, commands: lent, ...over });
 const page = {
-  state: vi.fn(async () => said),
+  state: vi.fn(async () => ({ ...said, commands: lent })),
   set: vi.fn(async (on: boolean) => { said = on ? state({ notice: undefined }) : state({ on: false, other: null, notice: undefined }); return said; }),
   open: vi.fn(async () => true),
   onChanged: vi.fn((cb: () => void) => { changed = cb; return () => {}; }),
@@ -67,12 +67,20 @@ it("its first switch turns the joining off at once, without lending anything, an
   expect(page.set).toHaveBeenLastCalledWith(true, "notice");
 });
 
-it("its second switch is running commands, as the person has it: off unless they had it on, and turned only by them", async () => {
+it("its second switch is running commands, as lending says it: off unless they had it on, turned only by them, and live while the notice is up", async () => {
   await render();
+  expect(q("[data-notice='together-default']")!.textContent).toContain("Let your Clouds' bots run commands on this computer");
   await click("[data-together-notice-commands]");
   expect(page.setCommands).toHaveBeenCalledWith(true);
   expect(q("[data-together-notice-commands]")!.getAttribute("aria-checked")).toBe("true");
   expect(page.noticeDone).toHaveBeenCalled();
+  lent = false;
+  await act(async () => changed());
+  await act(async () => {});
+  expect(q("[data-together-notice-commands]")!.getAttribute("aria-checked"), "turned off from the icon's menu meanwhile: the switch follows lending").toBe("false");
+  page.setCommands.mockImplementationOnce(async () => false);
+  await click("[data-together-notice-commands]");
+  expect(q("[data-together-notice-commands]")!.getAttribute("aria-checked"), "Cancel in the icon's question: lending still says off").toBe("false");
   await act(async () => root.unmount());
   resetPlacesTogetherForTest();
   root = createRoot(container);

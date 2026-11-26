@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { linkedAddress } from "./bot-link-address.mjs";
-import { createBotLinkMain, DEFAULT_RETRY_MS, OUTDATED_RETRY_MS, RETRY_MS } from "./bot-link-main.mjs";
+import { createBotLinkMain, ADMIN_EVERY_MS, OUTDATED_RETRY_MS, RETRY_MS } from "./bot-link-main.mjs";
 
 const CLOUD = "https://omb-u-1.fly.dev";
 
@@ -206,10 +206,10 @@ test("the Admin's word on sleep goes to this computer's server for its own Cloud
   assert.equal(h.localCalls.filter((call) => call.method === "PUT").length, puts);
   h.the.asleep = false;
   await h.link.look();
-  assert.deepEqual(h.localCalls.at(-1), { method: "PUT", body: { cloud: "awake", origin: CLOUD } });
+  assert.deepEqual(h.localCalls.at(-1), { method: "PUT", body: { cloud: "awake", origin: CLOUD, heardAt: 1_000_000 } });
   h.server = { ...h.server, asleep: true };
   await h.link.look();
-  assert.deepEqual(h.localCalls.at(-1), { method: "PUT", body: { cloud: "awake", origin: CLOUD } });
+  assert.deepEqual(h.localCalls.at(-1), { method: "PUT", body: { cloud: "awake", origin: CLOUD, heardAt: 1_000_000 } });
   const asked = h.cloudCalls.length;
   h.server = { ...h.server, needsPairing: true };
   h.the.asleep = true;
@@ -224,7 +224,7 @@ test("the Admin's word on sleep goes to this computer's server for its own Cloud
   assert.equal(ended.localCalls.some((call) => call.method === "PUT"), false);
   ended.the.asleep = false;
   await ended.link.look();
-  assert.deepEqual(ended.localCalls.filter((call) => call.method === "PUT"), [{ method: "PUT", body: { cloud: "awake", origin: CLOUD } }]);
+  assert.deepEqual(ended.localCalls.filter((call) => call.method === "PUT"), [{ method: "PUT", body: { cloud: "awake", origin: CLOUD, heardAt: 1_000_000 } }]);
 });
 
 test("\"asleep\" goes with when main first heard it: the same word keeps its time, a new one (a new since, or awake between) gets a new time", async (t) => {
@@ -270,7 +270,7 @@ test("on by default (never chosen, notice seen): it links like a switch turned o
   assert.deepEqual([h.pairs(), h.the.checks], [0, 1], "the Admin could not say just now: My Cloud is not asked");
   await h.link.look();
   assert.equal(h.the.checks, 1, "and the Admin is not asked again for a while");
-  h.the.clock += DEFAULT_RETRY_MS;
+  h.the.clock += ADMIN_EVERY_MS;
   h.the.adminAnswers = true;
   await h.link.look();
   assert.equal(h.pairs(), 1, "paired once the Admin says just now that it is awake");
@@ -292,4 +292,26 @@ test("another of this computer's workspaces starts: the link reads its server ag
   assert.equal(pairs.length, 2);
   assert.equal(pairs[1].body.computer.id, "22222222-2222-4222-8222-222222222222");
   assert.equal(h.link.address("computer", "scout"), linkedAddress("22222222-2222-4222-8222-222222222222", "scout"));
+});
+
+test("a link that parked as its Cloud went to sleep is never told awake on the Admin's older word: only on an answer from after the park, asked at most once a minute and never in the app's first seconds", async (t) => {
+  const h = harness({ on: true, deps: (the) => ({ quietMs: 15_000, powerChecked: async () => { the.checks = (the.checks ?? 0) + 1; the.clock += 200; return the.adminAnswers !== false; } }) });
+  t.after(() => h.link.close());
+  // Linked before this launch; this computer's server parked as it started (or as its Cloud went to sleep).
+  h.server = { on: true, role: "dialer", online: false, origin: CLOUD, account: "account-1", peer: { id: "cloud-1", name: "My Cloud" }, bots: 0, waiting: 0, asleep: true, parkedAt: h.the.clock, needsPairing: false };
+  await h.link.look();
+  const awake = () => h.localCalls.filter((call) => call.method === "PUT" && call.body.cloud === "awake");
+  assert.deepEqual([awake(), h.the.checks ?? 0], [[], 0], "the app's first seconds: nothing, not even the Admin");
+  h.the.clock += 15_000;
+  h.the.adminAnswers = false;
+  await h.link.look();
+  assert.deepEqual([awake(), h.the.checks], [[], 1], "the Admin's last word says awake, but it could not say so just now: the link stays parked");
+  await h.link.look();
+  assert.equal(h.the.checks, 1, "and the Admin is not asked again within the minute");
+  h.the.clock += ADMIN_EVERY_MS;
+  h.the.adminAnswers = true;
+  await h.link.look();
+  assert.equal(awake().length, 1, "an answer from just now, after the park: told once");
+  assert.equal(awake()[0].body.heardAt > h.server.parkedAt, true, "with when it was heard, so this computer's end can tell it is newer than its park");
+  assert.equal(h.cloudCalls.length, 0, "main itself asked My Cloud nothing");
 });

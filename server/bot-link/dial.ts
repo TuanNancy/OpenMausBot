@@ -7,6 +7,10 @@
 // or the app says the Cloud is awake (`start`), since any request would start a sleeping Cloud; the app looks every
 // minute and never asks the Cloud itself to find out.
 //
+// This server starting parks the link too, whatever it knew of the Cloud before: it asks nothing until the app says the
+// Cloud is awake, and an "awake" the app heard before the link parked (`heardAt`) is stale and starts nothing, since the
+// Admin's word lags the Cloud going to sleep and any request would start it again.
+//
 // Work a person waits on (a hand-off or room turn from a person's own line: `onWanted(true)`) may wake a parked Cloud:
 // the exchanges that follow are not marked background until one is answered, so the Cloud counts them as use and answers
 // them even if it has not yet noticed it was woken. Such a wake is bounded: WAKE_TRIES exchanges within WAKE_MS, and
@@ -53,6 +57,8 @@ export function createDialer({ link, fetch: fetchImpl = fetch, log = () => {}, h
    * the Cloud last answered a foreground exchange (its own word that it is awake); `staleSaid`: the app's last "asleep"
    * that was older, so it is logged once. */
   let wake = false, wakeUntil = 0, wakeTries = 0, provedAt = -Infinity, staleSaid: number | undefined | null = null;
+  /** When the link last parked (this computer's clock): an app's "awake" heard before it is stale. */
+  let parkedAt = -Infinity;
   const wakes: number[] = [];
   let session = "", ack = 0, fresh = true, retryMs = firstRetryMs;
   let active: AbortController | null = null, held: AbortController | null = null;
@@ -132,7 +138,7 @@ export function createDialer({ link, fetch: fetchImpl = fetch, log = () => {}, h
   /** The Cloud answered that it sleeps, the app's word parks the link, or a wake got no answer: nothing asks it until
    * there is new work for it or the app says it is awake. */
   const park = (peer: string | null) => {
-    asleep = true; fresh = true; provedAt = -Infinity;
+    asleep = true; fresh = true; provedAt = -Infinity; parkedAt = now();
     endWake(peer);
     link.setSleeps(true);
     if (peer) link.setOnline(peer, false);
@@ -239,10 +245,16 @@ export function createDialer({ link, fetch: fetchImpl = fetch, log = () => {}, h
 
   return {
     /** Starts asking, or asks again at once: after turning on, after pairing again, or when the app says the Cloud is
-     * awake. `gentle`: this server just started, so a Cloud that sleeps is left alone until the app says it is awake or
-     * there is work for it. */
-    start({ gentle = false }: { gentle?: boolean } = {}): void {
-      stopped = false; asleep = gentle && link.sleeps(); needsPairing = false; fresh = true; retryMs = firstRetryMs;
+     * awake. `gentle`: this server just started, so the Cloud is left alone until the app says it is awake or there is
+     * work for it (it may have gone to sleep, or stopped, since this server last asked). `heardAt`: when the app heard the
+     * Admin say it is awake (this computer's clock); a word heard before the link parked starts nothing. */
+    start({ gentle = false, heardAt }: { gentle?: boolean; heardAt?: number } = {}): void {
+      if (!stopped && asleep && heardAt !== undefined && heardAt <= parkedAt) {
+        log("bot link: the app says the Cloud is awake, but heard it before the Cloud went to sleep; the link stays parked");
+        return;
+      }
+      stopped = false; asleep = gentle; needsPairing = false; fresh = true; retryMs = firstRetryMs;
+      if (gentle) parkedAt = now();
       endWake(link.cloudPeer());
       wakeUp?.();
       void loop();
@@ -275,7 +287,7 @@ export function createDialer({ link, fetch: fetchImpl = fetch, log = () => {}, h
       for (const ended of link.ended()) if (ended.origin === origin && await bye(ended)) told.push(ended.token);
       if (told.length) link.forgetEnded(told);
     },
-    state: () => ({ running: !stopped, asleep, needsPairing }),
+    state: () => ({ running: !stopped, asleep, needsPairing, ...(asleep && Number.isFinite(parkedAt) ? { parkedAt } : {}) }),
     close(): void { stopped = true; active?.abort(); wakeUp?.(); stopListening(); stopWanted(); link.setTransfer(null); },
   };
 }

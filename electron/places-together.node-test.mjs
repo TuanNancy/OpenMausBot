@@ -400,13 +400,27 @@ test("turning it off forgets every list and stops the timer; the choice is kept"
   await f.together.refresh("cloud");
   f.together.open("computer", "nova");
   const off = f.together.set("computer", false);
-  assert.deepEqual([off.on, off.other, f.saved, f.cleared], [false, null, { v: 1, on: false }, 1]);
+  assert.deepEqual([off.on, off.other, f.saved, f.cleared], [false, null, { v: 1, on: false, choices: { "acct-a": false } }, 1]);
   f.shown = "cloud";
   f.together.arrived();
   assert.deepEqual(f.sent, []);
   assert.equal(f.together.open("computer", "nova"), false);
   const on = f.together.set("computer", true);
-  assert.deepEqual([on.on, on.other.bots, f.saved], [true, [], { v: 1, on: true }]);
+  assert.deepEqual([on.on, on.other.bots, f.saved], [true, [], { v: 1, on: true, choices: { "acct-a": true } }]);
+});
+
+test("a choice is the account's own: another account signed in on this computer has not chosen, and a file from before choices counts for everyone until the first choice", () => {
+  const f = setup({ saved: { v: 1, on: true } });
+  assert.equal(f.together.chosen(), true, "a file from before per-account choices: its one choice stands");
+  f.together.set("computer", false);
+  assert.deepEqual(f.saved, { v: 1, on: false, choices: { "acct-a": false } }, "`on` stays written, the last choice, for an older app");
+  f.cloud = { ...f.cloud, account: "acct-b" };
+  assert.equal(f.together.chosen(), null, "acct-b never chose: the default and its notice are theirs to see");
+  assert.equal(f.together.state("computer").notice, true);
+  f.together.set("computer", true);
+  f.cloud = { ...f.cloud, account: "acct-a" };
+  assert.equal(f.together.chosen(), false, "acct-a's off is kept");
+  assert.equal(f.together.on(), false);
 });
 
 test("without a My Cloud, or once this computer's bots moved away, there is nothing to join", async () => {
@@ -495,8 +509,11 @@ test("main wires it to the one rule for this app's own pages, and the preload of
   assert.match(main, /placesTogether\.navigated\(homeOfUrl\(url\)\)/);
   assert.match(main, /const cloudAwakeNow = async \(\) => \{ const account = cloudAccount; if \(!account\) return false; await account\.refresh\(\); return Date\.now\(\) - \(account\.state\(\)\.verifiedAt \?\? 0\) < 5_000; \};/);
   assert.match(main, /powerChecked: cloudAwakeNow, computer:/, "the list asks the Admin just before each read of My Cloud");
+  assert.match(main, /commands: \{ on: \(\) => sharingController\(\)\.terminalOn\(\), set: on => \(on \? lendingDialogs\.lendTerminal\(true, \(\) => sharingController\(\)\.lendTerminal\(true\)\) : sharingController\(\)\.lendTerminal\(false\)\) \}/,
+    "the notice's commands switch reads lending itself and asks the icon menu's own question before turning it on");
+  assert.match(main, /linkCommandsFact\.observe\(summary\); try \{ placesTogether\.commandsChanged\(summary\.terminal === true\); \} catch \{\} \}/, "and stays live while the notice is up");
   assert.match(main, /chosen: \(\) => placesTogether\.chosen\(\), powerChecked: cloudAwakeNow, quietMs: START_QUIET_MS,/, "so does the link's first pairing on by default");
-  assert.match(main, /computer: \(\) => togetherComputer\(\{ cloudHome: Boolean\(homeWindow\.cloudOrigin\(\)\), ownHome: Boolean\(ownHome\?\.origin\(\)\), profile: cleanWorkspace\.profile\(\), running: runningDataDir \}\)/);
+  assert.match(main, /computer: \(\) => togetherComputer\(\{ cloudHome: Boolean\(homeWindow\.cloudOrigin\(\)\), ownHome: Boolean\(ownHome\?\.origin\(\)\), frozen: cleanWorkspace\.marker\(\)\.frozen, profile: cleanWorkspace\.profile\(\), running: runningDataDir \}\)/, "the freeze marker counts before the home window knows My Cloud is home");
   assert.match(main, /focused: \(\) => powerMonitor\.getSystemIdleState\(60\) !== "locked" && Boolean\(mainWindow && !mainWindow\.isDestroyed\(\) && mainWindow\.isFocused\(\)\)/);
   assert.equal(main.match(/places-together:/g).length, 1, "main sends only that the list changed, never the list");
   const preload = readFileSync(join(HERE, "preload.cjs"), "utf8");
@@ -801,7 +818,7 @@ test("touching the switch anywhere ends the notice: off in the notice gives back
   assert.equal(f.together.state("computer").other.bots.length, 2);
   f.together.noticeDone("computer");
   const state = f.together.set("computer", false);
-  assert.deepEqual(state, { v: 1, available: true, on: false, here: "computer", other: null }, "the other place's rows are gone and no notice is due");
+  assert.deepEqual(state, { v: 1, available: true, on: false, here: "computer", other: null, commands: false }, "the other place's rows are gone and no notice is due");
   assert.equal(f.saved.on, false);
   assert.equal(f.together.switchedOff(), true, "the link ends");
   assert.deepEqual([c.set, c.turnedOn], [[], 0]);
@@ -814,7 +831,7 @@ test("touching the switch anywhere ends the notice: off in the notice gives back
   assert.equal(settings.f.together.noticeShown("computer"), false);
 });
 
-test("running commands: the notice's own switch, as the person has it; the person's own turn on of the joining still lends it", () => {
+test("running commands: the notice's own switch, read from lending itself and kept live, as the person has it; the person's own turn on in Settings still lends it", async () => {
   const had = withCommands({ saved: null }, true);
   assert.equal(had.f.together.state("computer").commands, true, "a grant the person had shows as on");
   had.f.together.noticeShown("computer");
@@ -822,21 +839,32 @@ test("running commands: the notice's own switch, as the person has it; the perso
   const never = withCommands({ saved: null });
   never.f.together.noticeShown("computer");
   assert.equal(never.f.together.state("computer").commands, false);
-  assert.equal(never.f.together.setCommands("computer", true), true);
+  assert.equal(await never.f.together.setCommands("computer", true), true);
   assert.deepEqual(never.c.set, [true]);
-  assert.equal(never.f.together.setCommands("computer", false), false);
+  assert.equal(await never.f.together.setCommands("computer", false), false);
   assert.deepEqual(never.c.set, [true, false]);
-  assert.throws(() => never.f.together.setCommands("cloud", true), /this computer's page/);
+  await assert.rejects(never.f.together.setCommands("cloud", true), /this computer's page/);
   const gone = withCommands({ saved: null, deps: { computer: () => null } });
-  assert.throws(() => gone.f.together.setCommands("computer", true), /this computer's page/, "not offered: not turned here");
+  await assert.rejects(gone.f.together.setCommands("computer", true), /this computer's page/, "not offered: not turned here");
+  const declined = setup({ saved: null, deps: { commands: { on: () => false, set: async () => false } } });
+  assert.equal(await declined.together.setCommands("computer", true), false, "Cancel in the icon's own question: still off, as lending says");
+  const live = withCommands({ saved: null });
+  live.f.together.noticeShown("computer");
+  const changes = live.f.changes;
+  live.c.lent = true;
+  live.f.together.commandsChanged(true);
+  assert.equal(live.f.changes, changes + 1, "turned on from the icon's menu while the notice is up: the page is told");
+  assert.equal(live.f.together.state("computer").commands, true, "and reads lending's own word, not a copy");
+  live.f.together.commandsChanged(true);
+  assert.equal(live.f.changes, changes + 1, "the same word again tells nothing");
   const again = withCommands({ saved: null });
   again.f.together.noticeShown("computer");
-  again.f.together.set("computer", false, { notice: true });
-  again.f.together.set("computer", true, { notice: true });
+  again.f.together.set("computer", false, { listOnly: true });
+  again.f.together.set("computer", true, { listOnly: true });
   assert.equal(again.c.turnedOn, 0, "off and on again in the notice: the joining only, never the grant");
   const byHand = withCommands({ saved: null });
   byHand.f.together.set("computer", true);
-  assert.equal(byHand.c.turnedOn, 1, "turned on by hand (Settings or the rail), it comes with the grant as before");
+  assert.equal(byHand.c.turnedOn, 1, "turned on in Settings, whose words say so, it comes with the grant as before");
   assert.equal(byHand.f.together.state("computer").notice, undefined);
 });
 
@@ -891,6 +919,10 @@ test("which of this computer's workspaces joins My Cloud: its own server with th
   assert.equal(togetherComputer({ cloudHome: true, ownHome: false, profile: null, running: "/data/omb" }), null, "the frozen copy a move left admits no turns");
   assert.equal(togetherComputer({ cloudHome: true, ownHome: false, profile: null, running: "/data/omb-clean" }), null, "the clean workspace");
   assert.equal(togetherComputer({ cloudHome: false, ownHome: true, profile: null, running: "/data/omb" }), null);
+  assert.equal(togetherComputer({ cloudHome: false, ownHome: false, frozen: true, profile: null, running: "/data/omb" }), null,
+    "the freeze marker is there before the home window knows My Cloud is home: the frozen copy still never joins");
+  assert.equal(togetherComputer({ cloudHome: false, ownHome: false, frozen: true, profile: null, running: "/data/omb-clean" }), null, "nor the clean workspace (signed in with no way to the moved Cloud)");
+  assert.equal(togetherComputer({ cloudHome: false, ownHome: false, frozen: true, profile: "default", running: "/data/omb-profiles/default" }), "profile:default");
 });
 
 test("My Cloud as home: offered (and on by default) while a workspace of this computer's own runs; another one has lists of its own; the frozen copy has none", async () => {
@@ -914,13 +946,13 @@ test("My Cloud as home: offered (and on by default) while a workspace of this co
   assert.deepEqual(f.asked, []);
 });
 
-test("the rail turns the same switch from a circle's menu, only from the window's rail, and turning it on there lends commands as Settings does", () => {
+test("the rail turns the same switch from a circle's menu, only from the window's rail, and turning it on there switches the list alone, never lending commands", () => {
   const handlers = new Map();
   const { f, c } = withCommands({ saved: null });
   installPlacesTogether({ ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) }, asking: (event) => event.page, rail: (event) => event.rail === true, together: f.together });
   assert.throws(() => handlers.get("places-together:rail-set")({ page: "local" }, true), /Only the window's rail/);
   assert.equal(handlers.get("places-together:rail-set")({ rail: true }, true), true);
-  assert.deepEqual([f.saved.on, c.turnedOn], [true, 1]);
+  assert.deepEqual([f.together.chosen(), c.turnedOn, c.set], [true, 0, []], "the rail's row never lets My Cloud run commands here");
   assert.equal(handlers.get("places-together:rail-set")({ rail: true }, false), false);
   assert.equal(f.saved.on, false);
   assert.deepEqual(f.together.offered(), { on: false });

@@ -2030,7 +2030,7 @@ describe("bots together by default", () => {
     const html = await launch();
     expect(html).toContain('data-notice="together-default"');
     expect(html).toContain("Your bots are in one list now");
-    expect(html).toContain("Let My Cloud&#x27;s bots run commands on this computer");
+    expect(html).toContain("Let your Clouds&#x27; bots run commands on this computer");
     expect(html).not.toContain(STAR);
     expect(together.on()).toBe(true);
     expect(lends, "the default never lends commands").toEqual([]);

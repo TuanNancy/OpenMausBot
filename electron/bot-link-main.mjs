@@ -6,9 +6,10 @@
 // out, or either changes, main ends it on this computer at once, and this computer's server tells that Cloud (now, or
 // when main next says it is awake).
 //
-// A Cloud that sleeps is never started for the link's sake: pairing is a background request made only while the Admin
-// says the Cloud is awake (or the person has just turned the switch on), a refusal is not asked again for hours, and
-// main passes the Admin's word on to this computer's server every minute so its end sleeps and wakes with the Cloud.
+// A Cloud that sleeps is never started for the link's sake: anything main sends it, and the "awake" main passes on to this
+// computer's server (which then asks it), waits until the Admin answered just now that it is awake: main's last word can be
+// a minute old, and a Cloud that went to sleep since would be started again by one request. Only the person's own turn on
+// pairs at once. Nothing of this in the app's first `quietMs`; a refusal is not asked again for hours.
 // "Asleep" goes with the time main first heard it, so that end can tell the Admin's lagging word from the Cloud's own
 // answers since (server/bot-link/dial.ts).
 //
@@ -26,8 +27,8 @@ const WATCH_MS = 60_000;
 export const RETRY_MS = 6 * 60 * 60_000;
 /** A Cloud on a version without the link is asked again once a day (or when the app starts, or the switch is turned on again). */
 export const OUTDATED_RETRY_MS = 24 * 60 * 60_000;
-/** On by default, a Cloud the Admin could not say just now is awake is asked about again after this long. */
-export const DEFAULT_RETRY_MS = 10 * 60_000;
+/** The Admin is asked again about the Cloud's sleep for the link at most this often. */
+export const ADMIN_EVERY_MS = 60_000;
 
 async function body(response) {
   try { return await response.json(); } catch { return null; }
@@ -52,9 +53,8 @@ async function body(response) {
  * }} deps `wanted()`: the switch is on and both places exist. `pref`: the switch's own file: turning it off ends a
  * link (My Cloud not being seen for a moment leaves it alone). `switchedOff()` and `chosen()` (places-together.mjs) stand
  * in for it: off also while the person never chose and has not seen the notice of the default; `chosen()` is the person's
- * own choice, and only their own turn on pairs with a Cloud the Admin says sleeps. On by default and not paired yet, it
- * pairs only `quietMs` after the app started and right after the Admin said just now that the Cloud is awake
- * (`powerChecked()`, as the list's own read), at most every DEFAULT_RETRY_MS. `cloud()`: My
+ * own choice, and only their own turn on pairs with a Cloud the Admin says sleeps. `powerChecked()`: asks the Admin again,
+ * true once it answered just now (at most every ADMIN_EVERY_MS from here). `cloud()`: My
  * Cloud's address and the signed-in account while the person has them, whether the Admin says it sleeps now (and
  * since when, in its words: a new `since` is a new word), and whether the person signed out. `cloudName()`: what the app calls My Cloud, in the person's language. `changed()`: the
  * addresses `address` gives changed (the link came, went, or is another Cloud's now).
@@ -120,13 +120,20 @@ export function createBotLinkMain({ wanted, pref = null, switchedOff = null, cho
   const isOff = () => { if (switchedOff) return switchedOff(); const read = readTogether(() => pref?.read()); return !read.unreadable && read.choice !== true; };
   let retryAt = -Infinity, choseOn = null, looking = null, idle = false;
   const quietUntil = now() + quietMs;
-  /** On by default (not the person's own turn on): pairing waits for the quiet start and the Admin's fresh "awake". */
-  async function defaultMayPair() {
-    if (now() < quietUntil || now() < retryAt) return false;
-    let awake = true;
-    if (powerChecked) { try { awake = (await powerChecked()) && !cloud().asleep; } catch { awake = false; } }
-    if (!awake) retryAt = now() + DEFAULT_RETRY_MS;
-    return awake;
+  let askedAdminAt = -Infinity;
+  /** When the Admin said just now, after `after`, that the Cloud is awake (this computer's clock), else null: what main
+   * needs before it sends the Cloud anything, or tells this computer's server it is awake. Never in the quiet start. */
+  async function awakeNow(after = -Infinity) {
+    if (now() < quietUntil || cloud().asleep) return null;
+    if (powerChecked) {
+      if (now() - askedAdminAt < ADMIN_EVERY_MS) return null;
+      askedAdminAt = now();
+      let answered = false;
+      try { answered = await powerChecked(); } catch {}
+      if (!answered || cloud().asleep) return null;
+    }
+    const at = now();
+    return at > after ? at : null;
   }
   /** The Admin's "asleep" and when main first heard it, on this computer's clock: heard again when the Admin's `since`
    * moves on or it said awake in between. */
@@ -158,8 +165,11 @@ export function createBotLinkMain({ wanted, pref = null, switchedOff = null, cho
     choseOn = own;
     if (!state.on) {
       // A link that ended while its Cloud slept or could not be reached: this computer's server tells that Cloud now.
-      if (mine.origin && !mine.asleep && Array.isArray(state.ended) && state.ended.includes(mine.origin)) await local("PUT", { cloud: "awake", origin: mine.origin }).catch(() => {});
-      if (wanted() && !mine.signedOut && (justOn || !mine.asleep)) { if (own || await defaultMayPair()) await tryPair(justOn); }
+      if (mine.origin && !mine.asleep && Array.isArray(state.ended) && state.ended.includes(mine.origin)) {
+        const at = await awakeNow();
+        if (at !== null) await local("PUT", { cloud: "awake", origin: mine.origin, heardAt: at }).catch(() => {});
+      }
+      if (wanted() && !mine.signedOut && (justOn || !mine.asleep)) { if (justOn || (now() >= retryAt && await awakeNow() !== null)) await tryPair(justOn); }
       // Off, with nothing linked and nothing left to tell a Cloud: the timer has no more to do until something changes.
       else idle = off && !(Array.isArray(state.ended) && state.ended.length);
       return;
@@ -175,10 +185,14 @@ export function createBotLinkMain({ wanted, pref = null, switchedOff = null, cho
       return;
     }
     if (!mine.origin) return;
-    if (state.needsPairing) { if (!mine.asleep && (own || await defaultMayPair())) await tryPair(false); return; }
+    if (state.needsPairing) { if (!mine.asleep && now() >= retryAt && await awakeNow() !== null) await tryPair(false); return; }
     // The Admin's word, passed on for this link's own Cloud only, for as long as this computer's end disagrees with it.
     if (mine.asleep && !state.asleep) await local("PUT", { cloud: "asleep", origin: mine.origin, ...(heardAt === null ? {} : { heardAt }) });
-    else if (!mine.asleep && state.asleep) await local("PUT", { cloud: "awake", origin: mine.origin });
+    else if (!mine.asleep && state.asleep) {
+      // Only an Admin answer from after the link parked: the one main holds may be from before the Cloud went to sleep.
+      const at = await awakeNow(Number.isFinite(state.parkedAt) ? state.parkedAt : -Infinity);
+      if (at !== null) await local("PUT", { cloud: "awake", origin: mine.origin, heardAt: at });
+    }
   }
   /** Brings the link in line with the switch, the account and the Cloud: now, when any of them changes, and every minute. */
   function look() {
