@@ -137,6 +137,16 @@ describe("the other place's bots in a bot's team prompts", () => {
     }
   });
 
+  it("past the cap, the Cloud Chief's roster keeps the bots of the computer in use over those of one that never came back, as list_bots lists both", () => {
+    const gone = Array.from({ length: 13 }, (_, index) => ({ ...mac({ id: `old${index}`, name: `Old ${index}`, title: "Helper" }, MAC, "Sam's Mac"), online: false }));
+    const inUse = [mac({ id: "writer", name: "Writer", title: "Writer" }, MAC2, "Sam's Mac"), mac({ id: "waiter", name: "Waiter", title: "Helper" }, MAC2, "Sam's Mac")];
+    const roster = createLinkedRoster({ link: onCloud([...gone, ...inUse]), bots: () => local });
+    const text = roster.forChief(chief, true)!.roster;
+    expect(text).toContain("- Writer — Writer");
+    expect(text).toContain("- Waiter — Helper");
+    expect(text).toMatch(/- …and \d+ more there: list_bots shows them\./u);
+  });
+
   it("a bot shared with only some people is told of no far bot, as it is told of no local bot everyone shares", () => {
     const roster = createLinkedRoster({ link: directory(farBots(2)), bots: () => local });
     const narrow = { ...writer, visibility: { people: ["sam@example.com"] } };

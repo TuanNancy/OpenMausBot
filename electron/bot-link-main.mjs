@@ -41,6 +41,7 @@ async function body(response) {
  *   switchedOff?(): boolean,
  *   chosen?(): boolean | null,
  *   powerChecked?(): Promise<boolean>,
+ *   napped?(): void,
  *   quietMs?: number,
  *   localRequest(route: string, init?: RequestInit): Promise<Response>,
  *   fetch: typeof fetch,
@@ -54,12 +55,14 @@ async function body(response) {
  * link (My Cloud not being seen for a moment leaves it alone). `switchedOff()` and `chosen()` (places-together.mjs) stand
  * in for it: off also while the person never chose and has not seen the notice of the default; `chosen()` is the person's
  * own choice, and only their own turn on pairs with a Cloud the Admin says sleeps. `powerChecked()`: asks the Admin again,
- * true once it answered just now (at most every ADMIN_EVERY_MS from here). `cloud()`: My
+ * true once it answered just now (at most every ADMIN_EVERY_MS from here). `napped()`: this computer's end heard My Cloud
+ * itself answer that it sleeps; main holds it asleep (cloud-power.mjs `hold`), as Files and lending do, so the Admin's
+ * lagging "awake" starts nothing. `cloud()`: My
  * Cloud's address and the signed-in account while the person has them, whether the Admin says it sleeps now (and
  * since when, in its words: a new `since` is a new word), and whether the person signed out. `cloudName()`: what the app calls My Cloud, in the person's language. `changed()`: the
  * addresses `address` gives changed (the link came, went, or is another Cloud's now).
  */
-export function createBotLinkMain({ wanted, pref = null, switchedOff = null, chosen = null, powerChecked = null, quietMs = 0, localRequest, fetch: fetchImpl, cloud, cloudName, changed = () => {}, log = () => {}, watchMs = WATCH_MS, now = Date.now }) {
+export function createBotLinkMain({ wanted, pref = null, switchedOff = null, chosen = null, powerChecked = null, napped = () => {}, quietMs = 0, localRequest, fetch: fetchImpl, cloud, cloudName, changed = () => {}, log = () => {}, watchMs = WATCH_MS, now = Date.now }) {
   const local = async (method, payload) => {
     const response = await localRequest(STATE, { method, signal: AbortSignal.timeout(15_000),
       ...(payload === undefined ? {} : { headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }) });
@@ -120,6 +123,7 @@ export function createBotLinkMain({ wanted, pref = null, switchedOff = null, cho
   const isOff = () => { if (switchedOff) return switchedOff(); const read = readTogether(() => pref?.read()); return !read.unreadable && read.choice !== true; };
   let retryAt = -Infinity, choseOn = null, looking = null, idle = false;
   const quietUntil = now() + quietMs;
+  let heardNap = -Infinity;
   let askedAdminAt = -Infinity;
   /** When the Admin said just now, after `after`, that the Cloud is awake (this computer's clock), else null: what main
    * needs before it sends the Cloud anything, or tells this computer's server it is awake. Never in the quiet start. */
@@ -159,6 +163,8 @@ export function createBotLinkMain({ wanted, pref = null, switchedOff = null, cho
     if (!state) return;
     if (state.on) await thisComputer().catch(() => null);
     note(state);
+    // My Cloud's own word that it sleeps, as this computer's end last heard it: held before anything below reads cloud().
+    if (Number.isFinite(state.cloudAsleepAt) && state.cloudAsleepAt > heardNap) { heardNap = state.cloudAsleepAt; try { napped(); } catch {} }
     const mine = cloud(), off = isOff(), own = readChoice() === true;
     // Only the person's own turn on, never the default's start: a Cloud the Admin says sleeps is left asleep for that.
     const justOn = choseOn === false && own && !off;

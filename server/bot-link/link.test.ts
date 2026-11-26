@@ -16,12 +16,12 @@ import type { PassedFile } from "../host/handoff-files.ts";
 import { readBody } from "../harness/http.ts";
 import { removeTempDir } from "../testing/cleanup.ts";
 import { createDialer } from "./dial.ts";
-import { createBotLink, SPOOL_KEEP_MS, type BotLink } from "./link.ts";
+import { createBotLink, PEER_EXPIRES_MS, SPOOL_KEEP_MS, type BotLink } from "./link.ts";
 import { createBotLinkRoutes as routesOf, linkSessionRefusal } from "../routes/bot-link.ts";
 import { createLinkedRooms, type LinkedRooms } from "../host/bot-link-rooms.ts";
 import { createRoomTranscript } from "../host/room-transcript.ts";
 import { CLOUD_IDLE_AWAKE_MS, createCloudPower, type CloudPower } from "../cloud-power.ts";
-import { EXCHANGE_BYTES, LINK_EXPIRES_MS, PAIR_PATH, STATE_PATH, SYNC_PATH, linkedId, peerKey, type Frame } from "./protocol.ts";
+import { EXCHANGE_BYTES, PAIR_PATH, STATE_PATH, SYNC_PATH, linkedId, peerKey, type Frame } from "./protocol.ts";
 
 /** How a place addresses a bot of another: by that place's key and the bot's id there. */
 const CLOUD = peerKey("cloud-environment"), COMPUTER = peerKey("computer-environment");
@@ -97,7 +97,7 @@ function place(label: string, bots: Bot[], version?: number) {
   const syncs: Array<{ background: boolean }> = [];
   const sockets = new Set<import("node:net").Socket>();
 
-  function boot(options: { limits?: { queueMs?: number; stallMs?: number }; tell?: { afterMs: number; withinMs: number } } = {}) {
+  function boot(options: { limits?: { queueMs?: number; stallMs?: number }; tell?: { afterMs: number; withinMs: number }; offlineWaitMs?: number } = {}) {
     rooms = createLinkedRooms({ dataDir: dir, store: roomStore as never, coordinator: () => coordinator, on: () => link.on(), linked: (peer) => link.has(peer), online: (peer) => link.online(peer), linkedBots: () => link.linked(), selfName: () => link.selfName(), wanted: (person) => link.wanted(person),
       window: (threadId, reader) => createRoomTranscript({ store: roomStore as never, teammateReportContext: () => "" }).window(threadId, "Sam", undefined, reader),
       opener: (botId, threadId) => (routineThreads.has(threadId) ? { requester: { kind: "routine_run", runId: "run-1", botId, threadId }, origin: { kind: "routine", source: "routine", ref: "routine-1" } } : undefined),
@@ -105,7 +105,7 @@ function place(label: string, bots: Bot[], version?: number) {
     link = createBotLink({
       rooms, directoryChanged: () => { directoryChanges += 1; rooms.sync(); },
       dataDir: dir, coordinator: () => coordinator, bots: () => bots, bot: (id) => bots.find((bot) => bot.id === id), level: () => "full", paused: (bot) => Boolean((bot as Bot).paused), acceptRefusal: (bot) => (bot as Bot).farWorkRefused ?? null,
-      ...(options.tell ? { tellAfterMs: options.tell.afterMs, tellWithinMs: options.tell.withinMs } : {}),
+      ...(options.tell ? { tellAfterMs: options.tell.afterMs, tellWithinMs: options.tell.withinMs } : {}), ...(options.offlineWaitMs ? { offlineWaitMs: options.offlineWaitMs } : {}),
       openThread: (bot, title, opener, brief) => { const id = `${bot.id}-work-${++openedCount}`; threads.add(id); opened.push({ threadId: id, title, from: opener.name, brief }); return id; },
       hasThread: (_botId, threadId) => threads.has(threadId), personName: () => "Sam",
       sentRow: (input) => { sent.push({ recipient: input.recipient.name, threadId: input.threadId, ...(input.roomId ? { roomId: input.roomId } : {}) }); },
@@ -244,7 +244,7 @@ afterEach(async () => {
 });
 
 /** A computer and a Cloud. The same id, `shared`, is a different bot in each. */
-async function two(options: { paired?: boolean; limits?: { queueMs?: number; stallMs?: number }; tell?: { afterMs: number; withinMs: number } } = {}) {
+async function two(options: { paired?: boolean; limits?: { queueMs?: number; stallMs?: number }; tell?: { afterMs: number; withinMs: number }; offlineWaitMs?: number } = {}) {
   const computer = place("computer", [{ id: "shared", name: "Scout" }, { id: "local-writer", name: "Writer" }]).boot(options);
   const cloud = place("cloud", [{ id: "shared", name: "Atlas" }, { id: "cloud-analyst", name: "Analyst" }]).boot(options);
   places.push(computer, cloud);
@@ -577,6 +577,55 @@ describe("the link between a computer and its Cloud", () => {
     expect(cloudOrigin).toContain("127.0.0.1");
   });
 
+  it("turned off mid-hand-off: the Cloud's work is stopped, and the asker is told so truthfully, with the bot's own name", async () => {
+    const { computer, cloud } = await two();
+    let stopped = false;
+    cloud.engine((_node, _resumed, signal) => new Promise((resolve) => { signal.addEventListener("abort", () => { stopped = true; resolve({ ok: false, text: "stopped" }); }); }));
+    await computer.handOff("local-writer", call(["Analyst"], "Count the orders"));
+    await until(() => cloud.runs.length === 1, "the work starts on the Cloud");
+    await computer.fetch("PUT", STATE_PATH, { on: false });
+    await until(() => stopped, "the Cloud's turn is stopped, not left running with nowhere to send its result");
+    await until(() => computer.results.length === 1, "the asker hears");
+    const [row] = computer.results;
+    expect(row!.name).toBe("Analyst (My Cloud)");
+    expect(row!.result).not.toMatch(/not (delivered|sent)/);
+    expect(row!.result).toContain("turned off");
+  });
+
+  it("a hand-off from the Cloud to a computer that is offline fails after a short wait with a plain line, instead of waiting for one that may never come back", async () => {
+    const { computer, cloud } = await two({ offlineWaitMs: 300 });
+    await computer.dialer.stop();
+    await until(() => !cloud.link.online(), "the Cloud sees the computer gone");
+    const { receipts } = await cloud.handOff("cloud-analyst", call(["Writer"], "Draft the summary"));
+    expect(receipts[0]!.detail).toContain("waits a minute for it and fails if it is not back by then");
+    await until(() => cloud.results.length === 1, "the hand-off ends");
+    expect(cloud.results[0]).toMatchObject({ status: "failed", name: "Writer (Sam's Mac)" });
+    expect(cloud.results[0]!.result).toContain("could not be reached for a minute");
+    computer.dialer.start();
+    await until(() => computer.link.online(), "the computer is back");
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(computer.runs, "what was given up is never run late").toEqual([]);
+  });
+
+  it("the same computer linked again under a new id (a reinstall, a new data folder) replaces its offline earlier link; a second computer of that name that is online stays", async () => {
+    const { computer, cloud, cloudOrigin } = await two();
+    const old = peerKey("computer-environment");
+    await computer.dialer.stop();
+    await until(() => !cloud.link.online(), "the old link goes quiet");
+    const again = place("computer-again", [{ id: "fresh-writer", name: "Writer" }]).boot();
+    places.push(again);
+    await again.listen();
+    await pair(again, cloud, cloudOrigin, { id: "computer-again-environment", name: "sam's mac" });
+    expect(cloud.link.has(old)).toBe(false);
+    expect(cloud.link.agents().map((bot) => bot.id)).toEqual([linkedId(peerKey("computer-again-environment"), "fresh-writer")]);
+    const twin = place("computer-twin", [{ id: "twin-writer", name: "Notes" }]).boot();
+    places.push(twin);
+    await twin.listen();
+    await pair(twin, cloud, cloudOrigin, { id: "computer-twin-environment", name: "Sam's Mac" });
+    expect(cloud.link.has(peerKey("computer-again-environment")), "an online computer of the same name is another computer").toBe(true);
+    expect(cloud.link.has(peerKey("computer-twin-environment"))).toBe(true);
+  });
+
   it("two computers on one Cloud: each has its own link, and work, results and stops go only to the computer they belong to", async () => {
     const { computer, cloud, cloudOrigin } = await two();
     const laptop = place("laptop", [{ id: "shared", name: "Scout" }, { id: "laptop-coder", name: "Coder" }]).boot();
@@ -645,12 +694,12 @@ describe("the link between a computer and its Cloud", () => {
     expect(computer.runs.filter((run) => !run.resumed)).toHaveLength(1);
   });
 
-  it("a computer not heard from for thirty days is unlinked on the Cloud: its sign-in ends and work waiting for it fails with the reason", async () => {
+  it("a computer not heard from for fourteen days is unlinked on the Cloud: its sign-in ends and work waiting for it fails with the reason", async () => {
     const { computer, cloud } = await two();
     await computer.dialer.stop();
     await until(() => !cloud.link.online(), "the Cloud sees the computer gone");
     await cloud.handOff("cloud-analyst", call(["Writer"], "Draft the summary"));
-    cloud.later(LINK_EXPIRES_MS - 60_000);
+    cloud.later(PEER_EXPIRES_MS - 60_000);
     cloud.link.tidy();
     expect(cloud.link.on()).toBe(true);
     cloud.later(120_000);
@@ -1141,14 +1190,14 @@ describe("the link between a computer and its Cloud", () => {
     expect(existsSync(join(computer.dir, "bot-link-rooms.json"))).toBe(false);
   });
 
-  it("a place whose link ends for good after thirty days: its bots leave the rooms, and each room says so once", async () => {
+  it("a place whose link ends for good after fourteen days: its bots leave the rooms, and each room says so once", async () => {
     const { computer, cloud } = await two();
     const mac = peerKey("computer-environment"), writer = linkedId(mac, "local-writer");
     const room = cloud.room("Launch", ["cloud-analyst", writer]);
     cloud.rooms.sync();
     await computer.dialer.stop();
     await until(() => !cloud.link.online(), "the Cloud sees the computer gone");
-    cloud.later(LINK_EXPIRES_MS - 60_000);
+    cloud.later(PEER_EXPIRES_MS - 60_000);
     cloud.link.tidy();
     expect(room.memberIds).toEqual(["cloud-analyst", writer]);
     cloud.later(120_000);

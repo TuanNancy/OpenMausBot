@@ -101,14 +101,16 @@ export function createLinkedRoster(deps: LinkedRosterDeps) {
   /** Only when it matters: the place cannot be reached now. */
   const state = (row: LinkedRow): string => row.online ? "" : row.kind === "cloud" && deps.link.role() === "dialer" && deps.link.sleeps() ? "asleep: work sent there waits" : "offline: work sent there waits";
 
-  /** The far bots in their place's order, the person's Chief first. `busy`: past the cap, the ones this place has work
-   * out with now come next; only a hand-off's [LIVE TEAMMATES] uses it, so a system prompt never changes with work. */
+  /** The far bots in their place's order, the person's Chief first. Past the cap, the bots of places that can be reached
+   * now are kept before those of places that cannot (a computer that never came back would otherwise crowd out the one
+   * in use, as its bots were listed first); `busy`: then the ones this place has work out with now; only a hand-off's
+   * [LIVE TEAMMATES] uses that, so a system prompt never changes with work. */
   function ordered(rows: readonly LinkedRow[], chief: LinkedRow | null, busy: boolean): LinkedRow[] {
     const first = (a: LinkedRow) => Number(a.id === chief?.id);
     const order = new Map(rows.map((row, index) => [row, index]));
     const used = new Map<string, number>();
     if (busy && rows.length > FAR_ROSTER_MAX) for (const node of deps.active?.() ?? []) used.set(node.botId, Math.max(used.get(node.botId) ?? 0, node.createdAt));
-    const kept = new Set([...rows].sort((a, b) => first(b) - first(a) || (used.get(b.id) ?? 0) - (used.get(a.id) ?? 0) || order.get(a)! - order.get(b)!).slice(0, FAR_ROSTER_MAX));
+    const kept = new Set([...rows].sort((a, b) => first(b) - first(a) || Number(b.online) - Number(a.online) || (used.get(b.id) ?? 0) - (used.get(a.id) ?? 0) || order.get(a)! - order.get(b)!).slice(0, FAR_ROSTER_MAX));
     return rows.filter((row) => kept.has(row)).sort((a, b) => first(b) - first(a) || order.get(a)! - order.get(b)!);
   }
 

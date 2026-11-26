@@ -512,7 +512,7 @@ test("main wires it to the one rule for this app's own pages, and the preload of
   assert.match(main, /commands: \{ on: \(\) => sharingController\(\)\.terminalOn\(\), set: on => \(on \? lendingDialogs\.lendTerminal\(true, \(\) => sharingController\(\)\.lendTerminal\(true\)\) : sharingController\(\)\.lendTerminal\(false\)\) \}/,
     "the notice's commands switch reads lending itself and asks the icon menu's own question before turning it on");
   assert.match(main, /linkCommandsFact\.observe\(summary\); try \{ placesTogether\.commandsChanged\(summary\.terminal === true\); \} catch \{\} \}/, "and stays live while the notice is up");
-  assert.match(main, /chosen: \(\) => placesTogether\.chosen\(\), powerChecked: cloudAwakeNow, quietMs: START_QUIET_MS,/, "so does the link's first pairing on by default");
+  assert.match(main, /chosen: \(\) => placesTogether\.chosen\(\), powerChecked: cloudAwakeNow, napped: \(\) => cloudPower\.hold\(\), quietMs: START_QUIET_MS,/, "so does the link's first pairing on by default");
   assert.match(main, /computer: \(\) => togetherComputer\(\{ cloudHome: Boolean\(homeWindow\.cloudOrigin\(\)\), ownHome: Boolean\(ownHome\?\.origin\(\)\), frozen: cleanWorkspace\.marker\(\)\.frozen, profile: cleanWorkspace\.profile\(\), running: runningDataDir \}\)/, "the freeze marker counts before the home window knows My Cloud is home");
   assert.match(main, /focused: \(\) => powerMonitor\.getSystemIdleState\(60\) !== "locked" && Boolean\(mainWindow && !mainWindow\.isDestroyed\(\) && mainWindow\.isFocused\(\)\)/);
   assert.equal(main.match(/places-together:/g).length, 1, "main sends only that the list changed, never the list");

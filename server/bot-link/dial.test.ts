@@ -312,6 +312,21 @@ describe("a Cloud that sleeps", () => {
     expect(observed.setOnline).toHaveBeenCalledWith("cloud-peer", true);
   });
 
+  it("the Cloud's own asleep answer is kept for the app to hold, apart from a park the app asked for", async () => {
+    let clock = 70_000;
+    const sleepy = await sleepyCloud(() => "asleep");
+    const { link } = sleepyLink(sleepy.origin);
+    const dialer = createDialer({ link, firstRetryMs: 1, now: () => clock });
+    cleanups.push(() => dialer.close());
+    dialer.start({ gentle: true });
+    expect(dialer.state()).not.toHaveProperty("cloudAsleepAt");
+    clock = 80_000;
+    dialer.start({ heardAt: 80_000 });
+    await sleepy.requests(1);
+    await settle();
+    expect(dialer.state()).toMatchObject({ asleep: true, cloudAsleepAt: 80_000 });
+  });
+
   it("a Cloud that answers even that exchange with asleep parks the link once, with no second ask", async () => {
     const sleepy = await sleepyCloud(() => "asleep");
     const { link, want, waking } = sleepyLink(sleepy.origin);

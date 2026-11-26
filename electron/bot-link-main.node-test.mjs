@@ -315,3 +315,22 @@ test("a link that parked as its Cloud went to sleep is never told awake on the A
   assert.equal(awake()[0].body.heardAt > h.server.parkedAt, true, "with when it was heard, so this computer's end can tell it is newer than its park");
   assert.equal(h.cloudCalls.length, 0, "main itself asked My Cloud nothing");
 });
+
+test("My Cloud's own answer that it sleeps is held as asleep, as Files and lending hold theirs: with no lending running, the Admin's lagging awake starts nothing", async (t) => {
+  const h = harness({ on: true, deps: (the) => ({ powerChecked: async () => { the.checks = (the.checks ?? 0) + 1; return true; }, napped: () => { the.naps = (the.naps ?? 0) + 1; the.asleep = true; } }) });
+  t.after(() => h.link.close());
+  await h.link.look();
+  h.localCalls.length = 0;
+  h.the.checks = 0;
+  h.the.clock += ADMIN_EVERY_MS;
+  h.server = { on: true, role: "dialer", online: false, origin: CLOUD, account: "account-1", peer: { id: "cloud-1", name: "My Cloud" }, bots: 0, waiting: 0, asleep: true, parkedAt: h.the.clock, cloudAsleepAt: h.the.clock, needsPairing: false };
+  await h.link.look();
+  const awake = () => h.localCalls.filter((call) => call.method === "PUT" && call.body.cloud === "awake");
+  assert.deepEqual([h.the.naps, awake(), h.the.checks ?? 0], [1, [], 0], "held before anything else reads the Cloud's state: no awake, and not even the Admin");
+  await h.link.look();
+  assert.equal(h.the.naps, 1, "the same answer is held once");
+  h.the.asleep = false;
+  h.the.clock += 1_000;
+  await h.link.look();
+  assert.equal(awake().length, 1, "once the hold is over and the Admin says awake just now, the link is told");
+});

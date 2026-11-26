@@ -57,8 +57,9 @@ export function createDialer({ link, fetch: fetchImpl = fetch, log = () => {}, h
    * the Cloud last answered a foreground exchange (its own word that it is awake); `staleSaid`: the app's last "asleep"
    * that was older, so it is logged once. */
   let wake = false, wakeUntil = 0, wakeTries = 0, provedAt = -Infinity, staleSaid: number | undefined | null = null;
-  /** When the link last parked (this computer's clock): an app's "awake" heard before it is stale. */
-  let parkedAt = -Infinity;
+  /** When the link last parked (this computer's clock): an app's "awake" heard before it is stale. `cloudAsleepAt`: when the
+   * Cloud itself last answered that it sleeps, which the app holds as asleep (cloud-power.mjs `hold`), as Files and lending do. */
+  let parkedAt = -Infinity, cloudAsleepAt = -Infinity;
   const wakes: number[] = [];
   let session = "", ack = 0, fresh = true, retryMs = firstRetryMs;
   let active: AbortController | null = null, held: AbortController | null = null;
@@ -168,6 +169,7 @@ export function createDialer({ link, fetch: fetchImpl = fetch, log = () => {}, h
       if (response.status === 503 && response.headers.get(POWER_HEADER) === "asleep") {
         await response.body?.cancel();
         park(peer);
+        cloudAsleepAt = parkedAt;
         return;
       }
       if (response.status === 401 || response.status === 403) {
@@ -287,7 +289,7 @@ export function createDialer({ link, fetch: fetchImpl = fetch, log = () => {}, h
       for (const ended of link.ended()) if (ended.origin === origin && await bye(ended)) told.push(ended.token);
       if (told.length) link.forgetEnded(told);
     },
-    state: () => ({ running: !stopped, asleep, needsPairing, ...(asleep && Number.isFinite(parkedAt) ? { parkedAt } : {}) }),
+    state: () => ({ running: !stopped, asleep, needsPairing, ...(asleep && Number.isFinite(parkedAt) ? { parkedAt } : {}), ...(Number.isFinite(cloudAsleepAt) ? { cloudAsleepAt } : {}) }),
     close(): void { stopped = true; active?.abort(); wakeUp?.(); stopListening(); stopWanted(); link.setTransfer(null); },
   };
 }
